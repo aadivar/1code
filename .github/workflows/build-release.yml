@@ -38,8 +38,7 @@ jobs:
         run: bun install
 
       - name: Download Claude Code binaries
-        run: bun run claude:download
-        continue-on-error: true # May fail without proper auth
+        run: bun run claude:download:all
 
       - name: Build app
         run: bun run build
