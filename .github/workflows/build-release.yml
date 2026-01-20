@@ -45,13 +45,9 @@ jobs:
         run: bun run build
 
       - name: Package for macOS (unsigned)
-        run: |
-          # Build without code signing for self-hosted releases
-          bun run package:mac -- \
-            --config.mac.identity=null \
-            --config.mac.notarize=null
+        run: bun run package:mac --config electron-builder.ci.yml
         env:
-          # Disable signing
+          # Disable code signing for self-hosted releases
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
       - name: Generate update manifests

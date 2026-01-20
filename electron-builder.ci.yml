@@ -1,0 +1,5 @@
+# electron-builder config for CI builds (no code signing)
+# Used by GitHub Actions for self-hosted fork builds
+
+mac:
+  identity: null
