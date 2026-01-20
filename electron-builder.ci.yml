@@ -1,11 +1,60 @@
 # electron-builder config for CI builds (no code signing)
 # Used by GitHub Actions for self-hosted fork builds
-# Extends the base config in package.json
 
-extends: null
+productName: 1Code
+appId: dev.21st.agents
 
 directories:
+  buildResources: build
   output: release
+
+files:
+  - out/**/*
+
+extraResources:
+  - from: drizzle
+    to: migrations
+  - from: resources/bin/${platform}-${arch}
+    to: bin
+    filter:
+      - "**/*"
+  - from: resources/bin/VERSION
+    to: bin/VERSION
+
+asar: true
+asarUnpack:
+  - node_modules/better-sqlite3/**/*
+  - node_modules/node-pty/**/*
+  - node_modules/@anthropic-ai/claude-agent-sdk/**/*
 
 mac:
   identity: null
+  category: public.app-category.developer-tools
+  icon: build/icon.icns
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+    - target: zip
+      arch:
+        - arm64
+        - x64
+
+dmg:
+  window:
+    width: 540
+    height: 380
+  contents:
+    - x: 140
+      y: 150
+      type: file
+    - x: 400
+      y: 150
+      type: link
+      path: /Applications
+  iconSize: 80
