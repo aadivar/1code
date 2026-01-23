@@ -906,6 +906,7 @@ export async function createWorktreeForChat(
 	projectId: string,
 	chatId: string,
 	selectedBaseBranch?: string,
+	branchType?: "local" | "remote",
 ): Promise<WorktreeResult> {
 	try {
 		const git = simpleGit(projectPath);
@@ -922,7 +923,12 @@ export async function createWorktreeForChat(
 		const worktreesDir = join(homedir(), ".21st", "worktrees");
 		const worktreePath = join(worktreesDir, projectId, chatId);
 
-		await createWorktree(projectPath, branch, worktreePath, `origin/${baseBranch}`);
+		// Determine startPoint based on branch type
+		// For local branches, use the local ref directly
+		// For remote branches or when type is not specified, use origin/{branch}
+		const startPoint = branchType === "local" ? baseBranch : `origin/${baseBranch}`;
+
+		await createWorktree(projectPath, branch, worktreePath, startPoint);
 
 		// Run worktree setup commands in BACKGROUND (don't block chat creation)
 		// This allows the user to start chatting immediately while deps install
