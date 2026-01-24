@@ -536,7 +536,7 @@ export function AgentsSettingsDialog({
                         key={tab.id}
                         tab={tab}
                         isActive={activeTab === tab.id}
-                        onClick={() => setActiveTab(tab.id)}
+                        onClick={() => handleTabClick(tab.id)}
                       />
                     ))}
                   </div>
@@ -551,7 +551,7 @@ export function AgentsSettingsDialog({
                         key={tab.id}
                         tab={tab}
                         isActive={activeTab === tab.id}
-                        onClick={() => setActiveTab(tab.id)}
+                        onClick={() => handleTabClick(tab.id)}
                       />
                     ))}
                   </div>
@@ -568,7 +568,7 @@ export function AgentsSettingsDialog({
                             key={tab.id}
                             tab={tab}
                             isActive={activeTab === tab.id}
-                            onClick={() => setActiveTab(tab.id)}
+                            onClick={() => handleTabClick(tab.id)}
                           />
                         ))}
                       </div>

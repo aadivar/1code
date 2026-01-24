@@ -3404,11 +3404,17 @@ const ChatViewInner = memo(function ChatViewInner({
     const item = popItemFromQueue(subChatId, itemId)
     if (!item) return
 
-    // Stop current stream if streaming
+    // Stop current stream if streaming and wait for status to become ready
     if (isStreamingRef.current) {
       await handleStop()
-      // Small delay to ensure stop completes
-      await new Promise((resolve) => setTimeout(resolve, 100))
+      // Wait for status to become "ready" (max 2 seconds)
+      const maxWait = 2000
+      const pollInterval = 50
+      let waited = 0
+      while (isStreamingRef.current && waited < maxWait) {
+        await new Promise((resolve) => setTimeout(resolve, pollInterval))
+        waited += pollInterval
+      }
     }
 
     // Build message parts from queued item
@@ -3497,11 +3503,17 @@ const ChatViewInner = memo(function ChatViewInner({
 
     if (!hasText && !hasImages) return
 
-    // Stop current stream if streaming
+    // Stop current stream if streaming and wait for status to become ready
     if (isStreamingRef.current) {
       await handleStop()
-      // Small delay to ensure stop completes
-      await new Promise((resolve) => setTimeout(resolve, 100))
+      // Wait for status to become "ready" (max 2 seconds)
+      const maxWait = 2000
+      const pollInterval = 50
+      let waited = 0
+      while (isStreamingRef.current && waited < maxWait) {
+        await new Promise((resolve) => setTimeout(resolve, pollInterval))
+        waited += pollInterval
+      }
     }
 
     // Auto-restore archived workspace when sending a message

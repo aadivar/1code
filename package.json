@@ -1,6 +1,6 @@
 {
   "name": "21st-desktop",
-  "version": "0.0.37",
+  "version": "0.0.38",
   "private": true,
   "description": "1Code - UI for parallel work with AI agents",
   "author": {
@@ -79,6 +79,7 @@
     "gray-matter": "^4.0.3",
     "jotai": "^2.11.1",
     "lucide-react": "^0.468.0",
+    "mermaid": "^11.12.2",
     "motion": "^11.15.0",
     "next-themes": "^0.4.4",
     "node-pty": "^1.1.0",
@@ -90,6 +91,7 @@
     "react-hotkeys-hook": "^4.6.1",
     "react-icons": "^5.5.0",
     "react-syntax-highlighter": "^16.1.0",
+    "react-zoom-pan-pinch": "^3.7.0",
     "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1",
     "shiki": "^1.24.4",

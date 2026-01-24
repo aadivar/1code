@@ -25,7 +25,7 @@ contextBridge.exposeInMainWorld("desktopApi", {
   isPackaged: () => ipcRenderer.invoke("app:isPackaged"),
 
   // Auto-update methods
-  checkForUpdates: () => ipcRenderer.invoke("update:check"),
+  checkForUpdates: (force?: boolean) => ipcRenderer.invoke("update:check", force),
   downloadUpdate: () => ipcRenderer.invoke("update:download"),
   installUpdate: () => ipcRenderer.invoke("update:install"),
 

@@ -152,7 +152,9 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
 
     // Read extended thinking setting dynamically (so toggle applies to existing chats)
     const thinkingEnabled = appStore.get(extendedThinkingEnabledAtom)
-    const maxThinkingTokens = thinkingEnabled ? 128_000 : undefined
+    // Max thinking tokens: 64000 is the max for claude-opus-4-5-20251101
+    // (128000 was causing "max_tokens: 128001 > 64000" errors)
+    const maxThinkingTokens = thinkingEnabled ? 64_000 : undefined
     const historyEnabled = appStore.get(historyEnabledAtom)
 
     // Read model selection dynamically (so model changes apply to existing chats)
