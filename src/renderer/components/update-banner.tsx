@@ -204,9 +204,8 @@ export function UpdateBanner() {
     return null
   }
 
-  // Updating state (downloading or ready to install, or pending click)
-  const isUpdating =
-    state.status === "downloading" || state.status === "ready" || isPending
+  // Downloading state (downloading or pending click, but not ready)
+  const isDownloading = state.status === "downloading" || isPending
 
   return (
     <div className="fixed bottom-4 left-4 z-50 flex items-center gap-3 rounded-lg border border-border bg-popover p-2.5 text-sm text-popover-foreground shadow-lg animate-in fade-in-0 slide-in-from-bottom-2">
@@ -228,18 +227,28 @@ export function UpdateBanner() {
         </>
       )}
 
-      {/* Updating State (downloading, installing, or pending) */}
-      {isUpdating && (
+      {/* Downloading State */}
+      {(state.status === "downloading" || isPending) && (
         <>
           <IconSpinner className="h-4 w-4 text-muted-foreground" />
           <span className="text-foreground">
-            {isPending ? "Starting update..." : "Updating..."}
+            {isPending ? "Starting update..." : "Downloading..."}
           </span>
           {progress !== undefined && !isPending && (
             <span className="text-muted-foreground ml-1">
               {Math.round(progress)}%
             </span>
           )}
+        </>
+      )}
+
+      {/* Ready to Install State */}
+      {state.status === "ready" && (
+        <>
+          <span className="text-foreground">Update ready</span>
+          <Button size="sm" onClick={() => installUpdate()}>
+            Restart Now
+          </Button>
         </>
       )}
     </div>
