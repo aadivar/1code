@@ -522,7 +522,7 @@ export const AgentEditTool = memo(function AgentEditTool({
       <div
         onClick={hasVisibleContent ? handleHeaderClick : undefined}
         className={cn(
-          "flex items-center justify-between pl-2.5 pr-2 h-7",
+          "flex items-center justify-between pl-2.5 pr-0.5 h-7",
           hasVisibleContent && !isPending && !isInputStreaming && "cursor-pointer hover:bg-muted/50 transition-colors duration-150",
         )}
       >

@@ -4676,10 +4676,18 @@ export function ChatView({
   const tabsToRender = useMemo(() => {
     if (!activeSubChatId) return []
 
-    // Use allSubChats from Zustand store for validation (not agentSubChats from tRPC)
-    // allSubChats is updated optimistically when creating new sub-chats,
-    // while agentSubChats from tRPC query may be stale during race conditions
-    const validSubChatIds = new Set(allSubChats.map(sc => sc.id))
+    // Use agentSubChats from server (tRPC/remote API) as the authoritative source for validation.
+    // This fixes the race condition where:
+    // 1. setChatId resets allSubChats to [] but loads activeSubChatId from localStorage
+    // 2. tabsToRender was checking activeSubChatId against empty allSubChats → always failing
+    //
+    // agentSubChats comes from the server and is the "truth" about which sub-chats exist.
+    // allSubChats in Zustand is only populated AFTER the init useEffect runs.
+    //
+    // For optimistic updates when creating new sub-chats, we fall back to allSubChats
+    // since the new sub-chat won't be in agentSubChats yet (tRPC query is stale).
+    const sourceForValidation = agentSubChats.length > 0 ? agentSubChats : allSubChats
+    const validSubChatIds = new Set(sourceForValidation.map(sc => sc.id))
 
     // If active sub-chat doesn't belong to this workspace → return []
     // This prevents rendering sub-chats from another workspace during race condition
@@ -4711,9 +4719,15 @@ export function ChatView({
       }
     }
 
-    // Return in validOpenIds order for consistent rendering
-    return validOpenIds.filter(id => mustRender.has(id))
-  }, [activeSubChatId, pinnedSubChatIds, openSubChatIds, allSubChats])
+    // Return tabs to render
+    // Always include activeSubChatId even if not in validOpenIds (handles race condition
+    // where openSubChatIds from localStorage doesn't include the active tab yet)
+    const result = validOpenIds.filter(id => mustRender.has(id))
+    if (!result.includes(activeSubChatId)) {
+      result.unshift(activeSubChatId)
+    }
+    return result
+  }, [activeSubChatId, pinnedSubChatIds, openSubChatIds, allSubChats, agentSubChats])
 
   // Get PR status when PR exists (for checking if it's open/merged/closed)
   const hasPrNumber = !!agentChat?.prNumber
@@ -6414,15 +6428,16 @@ Make sure to preserve all functionality from both branches when resolving confli
                   <IconSpinner className="h-6 w-6 animate-spin" />
                 </div>
               ) : (
-              tabsToRender.map(subChatId => {
+                tabsToRender.map(subChatId => {
                 const chat = getOrCreateChat(subChatId)
                 const isActive = subChatId === activeSubChatId
                 const isFirstSubChat = getFirstSubChatId(agentSubChats) === subChatId
 
                 // Defense in depth: double-check workspace ownership
-                // Use allSubChats (Zustand) instead of agentSubChats (tRPC) because
-                // new sub-chats are added to Zustand immediately but tRPC query may be stale
-                const belongsToWorkspace = allSubChats.some(sc => sc.id === subChatId)
+                // Use agentSubChats (server data) as primary source, fall back to allSubChats for optimistic updates
+                // This fixes the race condition where allSubChats is empty after setChatId but before setAllSubChats
+                const belongsToWorkspace = agentSubChats.some(sc => sc.id === subChatId) ||
+                                          allSubChats.some(sc => sc.id === subChatId)
 
                 if (!chat || !belongsToWorkspace) return null
 

@@ -66,6 +66,7 @@ export function AgentsContent() {
   const [selectedChatId, setSelectedChatId] = useAtom(selectedAgentChatIdAtom)
   const setSelectedChatIsRemote = useSetAtom(selectedChatIsRemoteAtom)
   const setChatSourceMode = useSetAtom(chatSourceModeAtom)
+  const chatSourceMode = useAtomValue(chatSourceModeAtom)
   const selectedDraftId = useAtomValue(selectedDraftIdAtom)
   const showNewChatForm = useAtomValue(showNewChatFormAtom)
   const betaKanbanEnabled = useAtomValue(betaKanbanEnabledAtom)
@@ -858,7 +859,7 @@ export function AgentsContent() {
           >
             {selectedChatId ? (
               <ChatView
-                key={selectedChatId}
+                key={`${chatSourceMode}-${selectedChatId}`}
                 chatId={selectedChatId}
                 isSidebarOpen={false}
                 onToggleSidebar={() => {}}
@@ -942,7 +943,7 @@ export function AgentsContent() {
           {selectedChatId ? (
             <div className="h-full flex flex-col relative overflow-hidden">
               <ChatView
-                key={selectedChatId}
+                key={`${chatSourceMode}-${selectedChatId}`}
                 chatId={selectedChatId}
                 isSidebarOpen={sidebarOpen}
                 onToggleSidebar={() => setSidebarOpen((prev) => !prev)}

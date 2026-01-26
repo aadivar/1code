@@ -3061,8 +3061,8 @@ export function AgentsSidebar({
             isMultiSelectMode ? "px-0" : "px-2",
           )}
         >
-          {/* Drafts Section - only show for local chats */}
-          {chatSourceMode === "local" && drafts.length > 0 && !searchQuery && (
+          {/* Drafts Section - always show regardless of chat source mode */}
+          {drafts.length > 0 && !searchQuery && (
             <div className={cn("mb-4", isMultiSelectMode ? "px-0" : "-mx-1")}>
               <div
                 className={cn(
