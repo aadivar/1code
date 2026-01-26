@@ -4539,10 +4539,13 @@ export function ChatView({
     })
   }, [chatId, setUnseenChanges])
 
-  // Get sub-chat state from store (using getState() to avoid re-renders on state changes)
-  const activeSubChatId = useAgentSubChatStore.getState().activeSubChatId
-  const openSubChatIds = useAgentSubChatStore.getState().openSubChatIds
-  const pinnedSubChatIds = useAgentSubChatStore.getState().pinnedSubChatIds
+  // Get sub-chat state from store (reactive selectors to re-render when store changes)
+  // IMPORTANT: Using reactive selectors here is critical for new chats where activeSubChatId
+  // starts as null and is set after the store initializes from the useEffect below.
+  // Using getState() would cause the component to not re-render, showing a disabled input.
+  const activeSubChatId = useAgentSubChatStore((state) => state.activeSubChatId)
+  const openSubChatIds = useAgentSubChatStore((state) => state.openSubChatIds)
+  const pinnedSubChatIds = useAgentSubChatStore((state) => state.pinnedSubChatIds)
 
   // Clear sub-chat "unseen changes" indicator when sub-chat becomes active
   useEffect(() => {
@@ -4556,7 +4559,7 @@ export function ChatView({
       return prev
     })
   }, [activeSubChatId, setSubChatUnseenChanges])
-  const allSubChats = useAgentSubChatStore.getState().allSubChats
+  const allSubChats = useAgentSubChatStore((state) => state.allSubChats)
 
   // tRPC utils for optimistic cache updates
   const utils = api.useUtils()
