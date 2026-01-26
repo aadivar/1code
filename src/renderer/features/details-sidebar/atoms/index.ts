@@ -8,7 +8,7 @@ import { Box, FileText, Terminal, FileDiff, ListTodo, Gauge } from "lucide-react
 // Widget System Types & Registry
 // ============================================================================
 
-export type WidgetId = "info" | "todo" | "plan" | "terminal" | "diff" | "usage"
+export type WidgetId = "info" | "usage" | "todo" | "plan" | "terminal" | "diff"
 
 export interface WidgetConfig {
   id: WidgetId
