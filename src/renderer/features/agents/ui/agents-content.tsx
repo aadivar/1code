@@ -11,6 +11,7 @@ const useUser = () => ({ user: null })
 const useClerk = () => ({ signOut: () => {} })
 import {
   selectedAgentChatIdAtom,
+  selectedChatIsRemoteAtom,
   previousAgentChatIdAtom,
   selectedDraftIdAtom,
   showNewChatFormAtom,
@@ -27,6 +28,8 @@ import {
   subChatsQuickSwitchOpenAtom,
   subChatsQuickSwitchSelectedIndexAtom,
   ctrlTabTargetAtom,
+  betaKanbanEnabledAtom,
+  chatSourceModeAtom,
 } from "../../../lib/atoms"
 import { NewChatForm } from "../main/new-chat-form"
 import { KanbanView } from "../../kanban"
@@ -61,8 +64,11 @@ const useIsAdmin = () => false
 // Main Component
 export function AgentsContent() {
   const [selectedChatId, setSelectedChatId] = useAtom(selectedAgentChatIdAtom)
+  const setSelectedChatIsRemote = useSetAtom(selectedChatIsRemoteAtom)
+  const setChatSourceMode = useSetAtom(chatSourceModeAtom)
   const selectedDraftId = useAtomValue(selectedDraftIdAtom)
   const showNewChatForm = useAtomValue(showNewChatFormAtom)
+  const betaKanbanEnabled = useAtomValue(betaKanbanEnabledAtom)
   const [selectedTeamId] = useAtom(selectedTeamIdAtom)
   const [sidebarOpen, setSidebarOpen] = useAtom(agentsSidebarOpenAtom)
   const [previewSidebarOpen, setPreviewSidebarOpen] = useAtom(
@@ -431,6 +437,9 @@ export function AgentsContent() {
             // If no chat selected, select first one
             if (!selectedChatId) {
               setSelectedChatId(sortedChats[0].id)
+              // agentChats are local chats only, so always set isRemote to false
+              setSelectedChatIsRemote(false)
+              setChatSourceMode("local")
               return
             }
 
@@ -441,6 +450,8 @@ export function AgentsContent() {
 
             if (currentIndex === -1) {
               setSelectedChatId(sortedChats[0].id)
+              setSelectedChatIsRemote(false)
+              setChatSourceMode("local")
               return
             }
 
@@ -459,6 +470,8 @@ export function AgentsContent() {
             }
 
             setSelectedChatId(sortedChats[nextIndex].id)
+            setSelectedChatIsRemote(false)
+            setChatSourceMode("local")
           }
           return
         }
@@ -470,6 +483,9 @@ export function AgentsContent() {
 
           if (selectedChat) {
             setSelectedChatId(selectedChat.id)
+            // agentChats are local chats only
+            setSelectedChatIsRemote(false)
+            setChatSourceMode("local")
           }
 
           setQuickSwitchOpen(false)
@@ -938,8 +954,12 @@ export function AgentsContent() {
             <div className="h-full flex flex-col relative overflow-hidden">
               <NewChatForm key={`new-chat-${newChatFormKeyRef.current}`} />
             </div>
-          ) : (
+          ) : betaKanbanEnabled ? (
             <KanbanView />
+          ) : (
+            <div className="h-full flex flex-col relative overflow-hidden">
+              <NewChatForm key={`new-chat-${newChatFormKeyRef.current}`} />
+            </div>
           )}
         </div>
       </div>

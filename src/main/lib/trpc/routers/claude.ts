@@ -776,9 +776,20 @@ export const claudeRouter = router({
 
             const resumeSessionId = input.sessionId || existingSessionId || undefined
 
-            console.log(`[claude] Session ID to resume: ${resumeSessionId} (Existing: ${existingSessionId})`)
+            // DEBUG: Session resume path tracing
+            const expectedSanitizedCwd = input.cwd.replace(/[/.]/g, "-")
+            const expectedSessionPath = path.join(isolatedConfigDir, "projects", expectedSanitizedCwd, `${resumeSessionId}.jsonl`)
+            console.log(`[claude] ========== SESSION DEBUG ==========`)
+            console.log(`[claude] subChatId: ${input.subChatId}`)
+            console.log(`[claude] cwd: ${input.cwd}`)
+            console.log(`[claude] sanitized cwd (expected): ${expectedSanitizedCwd}`)
+            console.log(`[claude] CLAUDE_CONFIG_DIR: ${isolatedConfigDir}`)
+            console.log(`[claude] Expected session path: ${expectedSessionPath}`)
+            console.log(`[claude] Session ID to resume: ${resumeSessionId}`)
+            console.log(`[claude] Existing sessionId from DB: ${existingSessionId}`)
             console.log(`[claude] Resume at UUID: ${resumeAtUuid}`)
-            
+            console.log(`[claude] ========== END SESSION DEBUG ==========`)
+
             console.log(`[SD] Query options - cwd: ${input.cwd}, projectPath: ${input.projectPath || "(not set)"}, mcpServers: ${mcpServersForSdk ? Object.keys(mcpServersForSdk).join(", ") : "(none)"}`)
             if (finalCustomConfig) {
               const redactedConfig = {
@@ -1930,7 +1941,7 @@ ${prompt}
       if (config.projects) {
         for (const [projectPath, projectConfig] of Object.entries(config.projects)) {
           if (projectConfig.mcpServers && Object.keys(projectConfig.mcpServers).length > 0) {
-            const groupName = projectPath.split('/').pop() || projectPath
+            const groupName = path.basename(projectPath) || projectPath
             // Ensure tokens are fresh before fetching tools
             const freshServers = await ensureMcpTokensFresh(projectConfig.mcpServers, projectPath)
             groups.push({
