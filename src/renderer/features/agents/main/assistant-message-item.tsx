@@ -8,10 +8,13 @@ import { CollapseIcon, ExpandIcon, IconTextUndo, PlanIcon } from "../../../compo
 import { TextShimmer } from "../../../components/ui/text-shimmer"
 import { cn } from "../../../lib/utils"
 import { isRollingBackAtom, rollbackHandlerAtom } from "../stores/message-store"
+import { showMessageJsonAtom } from "../atoms"
+import { MessageJsonDisplay } from "../ui/message-json-display"
 import { AgentAskUserQuestionTool } from "../ui/agent-ask-user-question-tool"
 import { AgentBashTool } from "../ui/agent-bash-tool"
 import { AgentEditTool } from "../ui/agent-edit-tool"
 import { AgentExploringGroup } from "../ui/agent-exploring-group"
+import { AgentTaskToolsGroup } from "../ui/agent-task-tools"
 import { AgentPlanFileTool } from "../ui/agent-plan-file-tool"
 import { isPlanFile } from "../ui/agent-tool-utils"
 import {
@@ -42,6 +45,15 @@ const EXPLORING_TOOLS = new Set([
   "tool-WebFetch",
 ])
 
+// Task management tools - these get grouped when consecutive
+const TASK_TOOLS = new Set([
+  "tool-TaskCreate",
+  "tool-TaskUpdate",
+  "tool-TaskGet",
+  "tool-TaskList",
+])
+
+
 // Group consecutive exploring tools into exploring-group
 function groupExploringTools(parts: any[], nestedToolIds: Set<string>): any[] {
   const result: any[] = []
@@ -66,6 +78,30 @@ function groupExploringTools(parts: any[], nestedToolIds: Set<string>): any[] {
     result.push({ type: "exploring-group", parts: currentGroup })
   } else {
     result.push(...currentGroup)
+  }
+  return result
+}
+
+// Group consecutive task tools into task-group
+function groupTaskTools(parts: any[], nestedToolIds: Set<string>): any[] {
+  const result: any[] = []
+  let currentGroup: any[] = []
+
+  for (const part of parts) {
+    const isNested = part.toolCallId && nestedToolIds.has(part.toolCallId)
+
+    if (TASK_TOOLS.has(part.type) && !isNested) {
+      currentGroup.push(part)
+    } else {
+      if (currentGroup.length >= 1) {
+        result.push({ type: "task-group", parts: currentGroup })
+      }
+      currentGroup = []
+      result.push(part)
+    }
+  }
+  if (currentGroup.length >= 1) {
+    result.push({ type: "task-group", parts: currentGroup })
   }
   return result
 }
@@ -241,6 +277,8 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
 }: AssistantMessageItemProps) {
   const onRollback = useAtomValue(rollbackHandlerAtom)
   const isRollingBack = useAtomValue(isRollingBackAtom)
+  const showMessageJson = useAtomValue(showMessageJsonAtom)
+  const isDev = import.meta.env.DEV
   const messageParts = message?.parts || []
 
   const contentParts = useMemo(() =>
@@ -573,7 +611,9 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
         {shouldCollapse && visibleStepsCount > 0 && (
           <CollapsibleSteps stepsCount={visibleStepsCount}>
             {(() => {
-              const grouped = groupExploringTools(stepParts, nestedToolIds)
+              // Apply both grouping functions: first task tools, then exploring tools
+              const taskGrouped = groupTaskTools(stepParts, nestedToolIds)
+              const grouped = groupExploringTools(taskGrouped, nestedToolIds)
               return grouped.map((part: any, idx: number) => {
                 if (part.type === "exploring-group") {
                   const isLast = idx === grouped.length - 1
@@ -587,6 +627,19 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
                     />
                   )
                 }
+                if (part.type === "task-group") {
+                  const isLast = idx === grouped.length - 1
+                  const isGroupStreaming = isStreaming && isLastMessage && isLast
+                  return (
+                    <AgentTaskToolsGroup
+                      key={idx}
+                      parts={part.parts}
+                      chatStatus={status}
+                      isStreaming={isGroupStreaming}
+                      subChatId={subChatId}
+                    />
+                  )
+                }
                 return renderPart(part, idx, false)
               })
             })()}
@@ -594,7 +647,9 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
         )}
 
         {(() => {
-          const grouped = groupExploringTools(finalParts, nestedToolIds)
+          // Apply both grouping functions: first task tools, then exploring tools
+          const taskGrouped = groupTaskTools(finalParts, nestedToolIds)
+          const grouped = groupExploringTools(taskGrouped, nestedToolIds)
           return grouped.map((part: any, idx: number) => {
             if (part.type === "exploring-group") {
               const isLast = idx === grouped.length - 1
@@ -605,6 +660,19 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
                   parts={part.parts}
                   chatStatus={status}
                   isStreaming={isGroupStreaming}
+                />
+              )
+            }
+            if (part.type === "task-group") {
+              const isLast = idx === grouped.length - 1
+              const isGroupStreaming = isStreaming && isLastMessage && isLast
+              return (
+                <AgentTaskToolsGroup
+                  key={idx}
+                  parts={part.parts}
+                  chatStatus={status}
+                  isStreaming={isGroupStreaming}
+                  subChatId={subChatId}
                 />
               )
             }
@@ -659,6 +727,12 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
             )}
           </div>
           <AgentMessageUsage metadata={msgMetadata} isStreaming={isStreaming} isMobile={isMobile} />
+        </div>
+      )}
+
+      {isDev && showMessageJson && (
+        <div className="px-2 mt-2">
+          <MessageJsonDisplay message={message} label="Assistant" />
         </div>
       )}
     </div>

@@ -2,12 +2,16 @@
 
 import {
   Database,
+  Eye,
   FileCode2,
   FolderSearch,
   GitBranch,
+  List,
   ListTodo,
   LogOut,
   Minimize2,
+  Plus,
+  RefreshCw,
   Server,
   Terminal,
   XCircle,
@@ -385,6 +389,81 @@ export const AgentToolRegistry: Record<string, ToolMeta> = {
       if (todos.length === 0) return ""
       return `${todos.length} ${todos.length === 1 ? "item" : "items"}`
     },
+    variant: "simple",
+  },
+
+  // Task management tools
+  "tool-TaskCreate": {
+    icon: Plus,
+    title: (part) => {
+      const isPending =
+        part.state !== "output-available" && part.state !== "output-error"
+      return isPending ? "Creating task" : "Created task"
+    },
+    subtitle: (part) => {
+      const subject = part.input?.subject || ""
+      return subject.length > 40 ? subject.slice(0, 37) + "..." : subject
+    },
+    variant: "simple",
+  },
+
+  "tool-TaskUpdate": {
+    icon: RefreshCw,
+    title: (part) => {
+      // Status comes from INPUT (output is just confirmation string)
+      const status = part.input?.status
+      const isPending =
+        part.state !== "output-available" && part.state !== "output-error"
+      if (isPending) {
+        if (status === "in_progress") return "Starting task"
+        if (status === "completed") return "Completing task"
+        if (status === "deleted") return "Deleting task"
+        return "Updating task"
+      }
+      if (status === "in_progress") return "Started task"
+      if (status === "completed") return "Completed task"
+      if (status === "deleted") return "Deleted task"
+      return "Updated task"
+    },
+    subtitle: (part) => {
+      const subject = part.input?.subject
+      const taskId = part.input?.taskId
+      if (subject) {
+        return subject.length > 40 ? subject.slice(0, 37) + "..." : subject
+      }
+      return taskId ? `#${taskId}` : ""
+    },
+    variant: "simple",
+  },
+
+  "tool-TaskGet": {
+    icon: Eye,
+    title: (part) => {
+      const isPending =
+        part.state !== "output-available" && part.state !== "output-error"
+      return isPending ? "Getting task" : "Got task"
+    },
+    subtitle: (part) => {
+      const subject = part.output?.task?.subject
+      const taskId = part.input?.taskId
+      if (subject) {
+        return subject.length > 40 ? subject.slice(0, 37) + "..." : subject
+      }
+      return taskId ? `#${taskId}` : ""
+    },
+    variant: "simple",
+  },
+
+  "tool-TaskList": {
+    icon: List,
+    title: (part) => {
+      const isPending =
+        part.state !== "output-available" && part.state !== "output-error"
+      const count = part.output?.tasks?.length
+      if (isPending) return "Listing tasks"
+      return count !== undefined ? `Listed ${count} tasks` : "Listed tasks"
+    },
+    subtitle: () => "",
     variant: "simple",
   },
 

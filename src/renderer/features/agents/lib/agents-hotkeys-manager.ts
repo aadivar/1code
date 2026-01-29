@@ -48,6 +48,7 @@ const SHORTCUT_TO_ACTION_MAP: Record<ShortcutActionId, string> = {
   "open-diff": "open-diff",
   "create-pr": "create-pr",
   "voice-input": "voice-input", // Handled directly in chat-input-area.tsx
+  "open-in-editor": "open-in-editor",
 }
 
 // Reverse mapping: action ID -> shortcut ID
@@ -104,6 +105,7 @@ export interface AgentsHotkeysManagerConfig {
   setSelectedChatId?: (id: string | null) => void
   setSelectedDraftId?: (id: string | null) => void
   setShowNewChatForm?: (show: boolean) => void
+  setDesktopView?: (view: import("../atoms").DesktopView) => void
   setSidebarOpen?: (open: boolean | ((prev: boolean) => boolean)) => void
   setSettingsDialogOpen?: (open: boolean) => void
   setSettingsActiveTab?: (tab: SettingsTab) => void
@@ -137,6 +139,7 @@ export function useAgentsHotkeys(
       setSelectedChatId: config.setSelectedChatId,
       setSelectedDraftId: config.setSelectedDraftId,
       setShowNewChatForm: config.setShowNewChatForm,
+      setDesktopView: config.setDesktopView,
       setSidebarOpen: config.setSidebarOpen,
       setSettingsDialogOpen: config.setSettingsDialogOpen,
       setSettingsActiveTab: config.setSettingsActiveTab,
@@ -147,6 +150,7 @@ export function useAgentsHotkeys(
       config.setSelectedChatId,
       config.setSelectedDraftId,
       config.setShowNewChatForm,
+      config.setDesktopView,
       config.setSidebarOpen,
       config.setSettingsDialogOpen,
       config.setSettingsActiveTab,

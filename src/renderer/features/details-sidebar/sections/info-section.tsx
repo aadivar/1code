@@ -1,17 +1,71 @@
 "use client"
 
-import { memo, useState, useCallback } from "react"
+import { memo, useState, useCallback, useEffect } from "react"
+import { useAtomValue } from "jotai"
 import {
   GitBranchFilledIcon,
   FolderFilledIcon,
   GitPullRequestFilledIcon,
+  ExternalLinkIcon,
 } from "@/components/ui/icons"
+import { Kbd } from "@/components/ui/kbd"
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { trpc } from "@/lib/trpc"
+import { preferredEditorAtom } from "@/lib/atoms"
+import { useResolvedHotkeyDisplay } from "@/lib/hotkeys"
+import { APP_META } from "../../../../shared/external-apps"
+import type { ExternalApp } from "../../../../shared/external-apps"
+
+// Editor icon imports
+import cursorIcon from "@/assets/app-icons/cursor.svg"
+import vscodeIcon from "@/assets/app-icons/vscode.svg"
+import vscodeInsidersIcon from "@/assets/app-icons/vscode-insiders.svg"
+import zedIcon from "@/assets/app-icons/zed.png"
+import sublimeIcon from "@/assets/app-icons/sublime.svg"
+import xcodeIcon from "@/assets/app-icons/xcode.svg"
+import intellijIcon from "@/assets/app-icons/intellij.svg"
+import webstormIcon from "@/assets/app-icons/webstorm.svg"
+import pycharmIcon from "@/assets/app-icons/pycharm.svg"
+import phpstormIcon from "@/assets/app-icons/phpstorm.svg"
+import rubymineIcon from "@/assets/app-icons/rubymine.svg"
+import golandIcon from "@/assets/app-icons/goland.svg"
+import clionIcon from "@/assets/app-icons/clion.svg"
+import riderIcon from "@/assets/app-icons/rider.svg"
+import datagripIcon from "@/assets/app-icons/datagrip.svg"
+import appcodeIcon from "@/assets/app-icons/appcode.svg"
+import fleetIcon from "@/assets/app-icons/fleet.svg"
+import rustroverIcon from "@/assets/app-icons/rustrover.svg"
+import ghosttyIcon from "@/assets/app-icons/ghostty.svg"
+import windsurfIcon from "@/assets/app-icons/windsurf.svg"
+import traeIcon from "@/assets/app-icons/trae.svg"
+
+const EDITOR_ICONS: Partial<Record<ExternalApp, string>> = {
+  cursor: cursorIcon,
+  vscode: vscodeIcon,
+  "vscode-insiders": vscodeInsidersIcon,
+  zed: zedIcon,
+  windsurf: windsurfIcon,
+  sublime: sublimeIcon,
+  xcode: xcodeIcon,
+  trae: traeIcon,
+  intellij: intellijIcon,
+  webstorm: webstormIcon,
+  pycharm: pycharmIcon,
+  phpstorm: phpstormIcon,
+  rubymine: rubymineIcon,
+  goland: golandIcon,
+  clion: clionIcon,
+  rider: riderIcon,
+  datagrip: datagripIcon,
+  appcode: appcodeIcon,
+  fleet: fleetIcon,
+  rustrover: rustroverIcon,
+  ghostty: ghosttyIcon,
+}
 
 interface InfoSectionProps {
   chatId: string
@@ -58,12 +112,17 @@ function PropertyRow({
 
   const isClickable = onClick || copyable
 
-  const valueSpan = (
-    <span
-      className={`text-xs text-foreground ${isClickable ? "cursor-pointer hover:underline" : ""}`}
+  const valueEl = isClickable ? (
+    <button
+      type="button"
+      className="text-xs text-foreground cursor-pointer rounded px-1.5 py-0.5 -ml-1.5 truncate hover:bg-accent hover:text-accent-foreground transition-colors"
       title={!tooltip ? title : undefined}
       onClick={handleClick}
     >
+      {value}
+    </button>
+  ) : (
+    <span className="text-xs text-foreground truncate" title={!tooltip ? title : undefined}>
       {value}
     </span>
   )
@@ -80,23 +139,23 @@ function PropertyRow({
         {copyable ? (
           <Tooltip open={showCopied ? true : undefined}>
             <TooltipTrigger asChild>
-              {valueSpan}
+              {valueEl}
             </TooltipTrigger>
             <TooltipContent side="top" className="text-xs">
               {showCopied ? "Copied" : "Click to copy"}
             </TooltipContent>
           </Tooltip>
         ) : tooltip ? (
-          <Tooltip>
+          <Tooltip delayDuration={500}>
             <TooltipTrigger asChild>
-              {valueSpan}
+              {valueEl}
             </TooltipTrigger>
             <TooltipContent side="top" className="text-xs">
               {tooltip}
             </TooltipContent>
           </Tooltip>
         ) : (
-          valueSpan
+          valueEl
         )}
       </div>
     </div>
@@ -117,8 +176,13 @@ export const InfoSection = memo(function InfoSection({
   // Extract folder name from path
   const folderName = worktreePath?.split("/").pop() || "Unknown"
 
-  // Mutation to open folder in Finder
+  // Preferred editor from settings
+  const preferredEditor = useAtomValue(preferredEditorAtom)
+  const editorMeta = APP_META[preferredEditor]
+
+  // Mutations
   const openInFinderMutation = trpc.external.openInFinder.useMutation()
+  const openInAppMutation = trpc.external.openInApp.useMutation()
 
   // Check if this is a remote sandbox chat (no local worktree)
   const isRemoteChat = !worktreePath && !!remoteInfo
@@ -153,6 +217,23 @@ export const InfoSection = memo(function InfoSection({
       openInFinderMutation.mutate(worktreePath)
     }
   }
+
+  const isWorktree = !!worktreePath && worktreePath.includes(".21st/worktrees")
+  const openInEditorHotkey = useResolvedHotkeyDisplay("open-in-editor")
+
+  const handleOpenInEditor = useCallback(() => {
+    if (worktreePath) {
+      openInAppMutation.mutate({ path: worktreePath, app: preferredEditor })
+    }
+  }, [worktreePath, preferredEditor, openInAppMutation])
+
+  // Listen for ⌘O hotkey event
+  useEffect(() => {
+    if (!isWorktree) return
+    const handler = () => handleOpenInEditor()
+    window.addEventListener("open-in-editor", handler)
+    return () => window.removeEventListener("open-in-editor", handler)
+  }, [isWorktree, handleOpenInEditor])
 
   const handleOpenPr = () => {
     if (pr?.url) {
@@ -252,6 +333,39 @@ export const InfoSection = memo(function InfoSection({
           onClick={handleOpenFolder}
           tooltip="Open in Finder"
         />
+      )}
+      {/* Open in Editor - only for actual git worktrees (under ~/.21st/worktrees/) */}
+      {isWorktree && (
+        <div className="flex items-center min-h-[28px]">
+          <div className="flex items-center gap-1.5 w-[100px] flex-shrink-0">
+            <ExternalLinkIcon className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+            <span className="text-xs text-muted-foreground truncate">Open in</span>
+          </div>
+          <div className="flex-1 min-w-0 pl-2">
+            <Tooltip delayDuration={500}>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={handleOpenInEditor}
+                  className="flex items-center gap-1.5 text-xs text-foreground cursor-pointer rounded px-1.5 py-0.5 -ml-1.5 hover:bg-accent hover:text-accent-foreground transition-colors"
+                >
+                  {EDITOR_ICONS[preferredEditor] && (
+                    <img
+                      src={EDITOR_ICONS[preferredEditor]}
+                      alt=""
+                      className="h-3.5 w-3.5 flex-shrink-0"
+                    />
+                  )}
+                  {editorMeta.label}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>
+                Open in {editorMeta.label}
+                {openInEditorHotkey && <Kbd className="normal-case font-sans">{openInEditorHotkey}</Kbd>}
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        </div>
       )}
     </div>
   )

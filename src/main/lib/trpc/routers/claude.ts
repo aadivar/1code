@@ -478,6 +478,7 @@ export const claudeRouter = router({
         images: z.array(imageAttachmentSchema).optional(), // Image attachments
         historyEnabled: z.boolean().optional(),
         offlineModeEnabled: z.boolean().optional(), // Whether offline mode (Ollama) is enabled in settings
+        enableTasks: z.boolean().optional(), // Enable task management tools (TodoWrite, Task agents)
       }),
     )
     .subscription(({ input }) => {
@@ -739,16 +740,15 @@ export const claudeRouter = router({
             }
 
             // Build full environment for Claude SDK (includes HOME, PATH, etc.)
-            const claudeEnv = buildClaudeEnv(
-              finalCustomConfig
-                ? {
-                    customEnv: {
-                      ANTHROPIC_AUTH_TOKEN: finalCustomConfig.token,
-                      ANTHROPIC_BASE_URL: finalCustomConfig.baseUrl,
-                    },
-                  }
-                : undefined,
-            )
+            const claudeEnv = buildClaudeEnv({
+              ...(finalCustomConfig && {
+                customEnv: {
+                  ANTHROPIC_AUTH_TOKEN: finalCustomConfig.token,
+                  ANTHROPIC_BASE_URL: finalCustomConfig.baseUrl,
+                },
+              }),
+              enableTasks: input.enableTasks ?? true,
+            })
 
             // Debug logging in dev
             if (process.env.NODE_ENV !== "production") {

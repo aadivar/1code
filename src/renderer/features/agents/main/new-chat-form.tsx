@@ -292,8 +292,16 @@ export function NewChatForm({
 
   const [selectedModel, setSelectedModel] = useState(
     () =>
-      availableModels.models.find((m) => m.id === lastSelectedModelId) || availableModels.models[1],
+      availableModels.models.find((m) => m.id === lastSelectedModelId) || availableModels.models[0],
   )
+
+  // Sync selectedModel when atom value changes (e.g., after localStorage hydration)
+  useEffect(() => {
+    const model = availableModels.models.find((m) => m.id === lastSelectedModelId)
+    if (model && model.id !== selectedModel.id) {
+      setSelectedModel(model)
+    }
+  }, [lastSelectedModelId])
 
   // Determine current Ollama model (selected or recommended)
   const currentOllamaModel = selectedOllamaModel || availableModels.recommendedModel || availableModels.ollamaModels[0]

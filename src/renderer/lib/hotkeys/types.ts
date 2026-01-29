@@ -30,6 +30,7 @@ export type ShortcutActionId =
   | "open-diff"
   | "create-pr"
   | "voice-input"
+  | "open-in-editor"
 
 /**
  * Category for organizing shortcuts in the UI

@@ -177,6 +177,16 @@ export const ALL_SHORTCUT_ACTIONS: ShortcutAction[] = [
     category: "agents",
     defaultKeys: ["ctrl", "opt"],
   },
+
+  // ============================================
+  // WORKSPACES (additional)
+  // ============================================
+  {
+    id: "open-in-editor",
+    label: "Open in editor",
+    category: "workspaces",
+    defaultKeys: ["cmd", "O"],
+  },
 ]
 
 /**

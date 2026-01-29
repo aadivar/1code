@@ -131,28 +131,29 @@ export const AgentBashTool = memo(function AgentBashTool({
         </span>
 
         {/* Status and expand button */}
-        <div className="flex items-center gap-2 flex-shrink-0 ml-2">
-          {/* Status - min-width ensures no layout shift */}
-          <div className="flex items-center gap-1 text-xs text-muted-foreground min-w-[60px] justify-end">
+        <div className="flex items-center gap-1.5 flex-shrink-0 ml-2">
+          {/* Status */}
+          {!isPending && (
+            <div className="flex items-center gap-1 text-xs text-muted-foreground">
+              {isSuccess ? (
+                <>
+                  <Check className="w-3 h-3" />
+                  <span>Success</span>
+                </>
+              ) : isError ? (
+                <>
+                  <X className="w-3 h-3" />
+                  <span>Failed</span>
+                </>
+              ) : null}
+            </div>
+          )}
+
+          {/* Expand/Collapse button or spinner */}
+          <div className="w-6 h-6 flex items-center justify-center">
             {isPending ? (
               <IconSpinner className="w-3 h-3" />
-            ) : isSuccess ? (
-              <>
-                <Check className="w-3 h-3" />
-                <span>Success</span>
-              </>
-            ) : isError ? (
-              <>
-                <X className="w-3 h-3" />
-                <span>Failed</span>
-              </>
-            ) : null}
-          </div>
-
-          {/* Expand/Collapse button - only show when not pending and has output that can be expanded */}
-          {/* Always render container for consistent spacing */}
-          <div className="w-6 h-6 flex items-center justify-center">
-            {!isPending && hasOutput && hasMoreOutput && (
+            ) : hasOutput && hasMoreOutput ? (
               <button
                 onClick={(e) => {
                   e.stopPropagation()
@@ -166,7 +167,7 @@ export const AgentBashTool = memo(function AgentBashTool({
                   <ExpandIcon className="w-4 h-4 text-muted-foreground" />
                 )}
               </button>
-            )}
+            ) : null}
           </div>
         </div>
       </div>

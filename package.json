@@ -1,6 +1,6 @@
 {
   "name": "21st-desktop",
-  "version": "0.0.49",
+  "version": "0.0.50",
   "private": true,
   "description": "1Code - UI for parallel work with AI agents",
   "author": {
@@ -19,8 +19,8 @@
     "dist": "electron-builder",
     "dist:manifest": "node scripts/generate-update-manifest.mjs",
     "dist:upload": "node scripts/upload-release.mjs",
-    "claude:download": "node scripts/download-claude-binary.mjs",
-    "claude:download:all": "node scripts/download-claude-binary.mjs --all",
+    "claude:download": "node scripts/download-claude-binary.mjs --version=2.1.22",
+    "claude:download:all": "node scripts/download-claude-binary.mjs --version=2.1.22 --all",
     "release": "rm -rf release && bun i && bun run claude:download && bun run build && bun run package:mac && bun run dist:manifest && ./scripts/upload-release-wrangler.sh",
     "setup:fork": "node scripts/setup-fork-updates.mjs",
     "release:dev": "rm -rf release && bun run claude:download && bun run build && bun run package:mac && rm -rf node_modules && bun i",
@@ -34,7 +34,7 @@
   },
   "dependencies": {
     "@ai-sdk/react": "^3.0.14",
-    "@anthropic-ai/claude-agent-sdk": "^0.2.12",
+    "@anthropic-ai/claude-agent-sdk": "0.2.22",
     "@git-diff-view/react": "^0.0.35",
     "@git-diff-view/shiki": "^0.0.36",
     "@modelcontextprotocol/sdk": "^1.25.3",

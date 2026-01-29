@@ -395,8 +395,17 @@ export const ChatInputArea = memo(function ChatInputArea({
   const autoOfflineMode = useAtomValue(autoOfflineModeAtom)
   const showOfflineFeatures = useAtomValue(showOfflineModeFeaturesAtom)
   const [selectedModel, setSelectedModel] = useState(
-    () => availableModels.models.find((m) => m.id === lastSelectedModelId) || availableModels.models[1],
+    () => availableModels.models.find((m) => m.id === lastSelectedModelId) || availableModels.models[0],
   )
+
+  // Sync selectedModel when atom value changes (e.g., after localStorage hydration)
+  useEffect(() => {
+    const model = availableModels.models.find((m) => m.id === lastSelectedModelId)
+    if (model && model.id !== selectedModel.id) {
+      setSelectedModel(model)
+    }
+  }, [lastSelectedModelId])
+
   const customClaudeConfig = useAtomValue(customClaudeConfigAtom)
   const normalizedCustomClaudeConfig =
     normalizeCustomClaudeConfig(customClaudeConfig)
