@@ -72,10 +72,15 @@ export const AgentThinkingTool = memo(function AgentThinkingTool({
     return () => clearInterval(interval)
   }, [isStreaming])
 
-  // Auto-scroll when expanded during streaming
+  // Track whether content overflows the scroll container
+  const [isOverflowing, setIsOverflowing] = useState(false)
+
+  // Auto-scroll when expanded during streaming + check overflow
   useEffect(() => {
     if (isStreaming && isExpanded && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+      const el = scrollRef.current
+      setIsOverflowing(el.scrollHeight > el.clientHeight)
+      el.scrollTop = el.scrollHeight
     }
   }, [part.input?.text, isStreaming, isExpanded])
 
@@ -142,14 +147,14 @@ export const AgentThinkingTool = memo(function AgentThinkingTool({
           <div
             className={cn(
               "absolute inset-x-0 top-0 h-8 bg-gradient-to-b from-background to-transparent z-10 pointer-events-none transition-opacity duration-200",
-              isStreaming ? "opacity-100" : "opacity-0",
+              isStreaming && isOverflowing ? "opacity-100" : "opacity-0",
             )}
           />
           <div
             ref={scrollRef}
             className={cn(
-              "px-2 opacity-50",
-              isStreaming && "overflow-y-auto scrollbar-none max-h-24",
+              "px-2",
+              isStreaming && "overflow-y-auto scrollbar-hide max-h-36",
             )}
           >
             <ChatMarkdownRenderer content={thinkingText} size="sm" isStreaming={isStreaming} />

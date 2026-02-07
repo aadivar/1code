@@ -92,7 +92,8 @@ function extractPrInfo(command: string, stdout: string): GitPrInfo | null {
 export function extractGitActivity(parts: any[]): GitActivity | null {
   let lastCommit: GitCommitInfo | null = null
   let lastPr: GitPrInfo | null = null
-  let hasPush = false
+  let lastPushHash: string | null = null
+  let hadRebase = false
 
   for (const part of parts) {
     if (part.type !== "tool-Bash") continue
@@ -100,6 +101,7 @@ export function extractGitActivity(parts: any[]): GitActivity | null {
 
     const command: string = part.input?.command || ""
     const stdout: string = part.output?.stdout || part.output?.output || ""
+    const stderr: string = part.output?.stderr || ""
 
     const commit = extractCommitInfo(command, stdout)
     if (commit) lastCommit = commit
@@ -107,15 +109,40 @@ export function extractGitActivity(parts: any[]): GitActivity | null {
     const pr = extractPrInfo(command, stdout)
     if (pr) lastPr = pr
 
-    // Detect successful git push (no stderr error, command contains git push)
-    if (/git\s+push/.test(command) && !part.output?.stderr?.includes("error")) {
-      hasPush = true
+    // Detect rebase (git pull --rebase rewrites commit hashes)
+    if (/git\s+pull\s+--rebase/.test(command)) {
+      hadRebase = true
+    }
+
+    // Detect successful git push and extract the final pushed hash
+    // Push output format: "oldHash..newHash branch -> origin/branch"
+    if (/git\s+push/.test(command) && !stderr.includes("error")) {
+      // Check stdout and stderr for push ref update (git push outputs to stderr)
+      const pushOutput = stdout + "\n" + stderr
+      const pushMatch = pushOutput.match(/[\da-f]+\.\.([\da-f]+)\s+\S+\s*->\s*\S+/)
+      if (pushMatch) {
+        lastPushHash = pushMatch[1]!
+      } else {
+        // Push succeeded but no hash in output (e.g. first push with -u)
+        lastPushHash = ""
+      }
     }
   }
 
-  // Mark commit as pushed if a git push was found in the same message
-  if (lastCommit && hasPush) {
-    lastCommit.pushed = true
+  if (lastCommit && lastPushHash !== null) {
+    // If rebase happened after commit, the original hash is invalid —
+    // use the hash from the final git push output instead
+    if (hadRebase && lastPushHash) {
+      lastCommit.hash = lastPushHash
+      lastCommit.pushed = true
+    } else if (hadRebase && !lastPushHash) {
+      // Rebase happened but couldn't extract new hash from push output —
+      // don't mark as pushed (old hash would 404 on GitHub)
+      lastCommit.pushed = false
+    } else {
+      // No rebase — original hash is valid
+      lastCommit.pushed = true
+    }
   }
 
   // PR is more significant than commit (PR implies push already happened)

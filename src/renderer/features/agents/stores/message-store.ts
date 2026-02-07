@@ -358,6 +358,78 @@ export const isFirstUserMessageAtomFamily = atomFamily((userMsgId: string) =>
   })
 )
 
+type RollbackLookupMessage = {
+  role: "user" | "assistant" | "system"
+  metadata?: any
+  parts?: MessagePart[]
+}
+
+function hasCompactToolUsePart(parts?: MessagePart[]): boolean {
+  return !!parts?.some((part) => part.type === "tool-Compact")
+}
+
+// Shared rollback target lookup used by both UI visibility and rollback action.
+export function findRollbackTargetSdkUuidForUserIndex(
+  userMsgIndex: number,
+  totalMessageCount: number,
+  getMessageAt: (index: number) => RollbackLookupMessage | null | undefined,
+): string | null {
+  if (userMsgIndex <= 0 || totalMessageCount <= 0) return null
+
+  // 1) Pick the first assistant before this user message.
+  let targetAssistantIndex = -1
+  let targetAssistantMessage: RollbackLookupMessage | null | undefined = null
+  for (let i = userMsgIndex - 1; i >= 0; i--) {
+    const message = getMessageAt(i)
+    if (!message || message.role !== "assistant") continue
+    targetAssistantIndex = i
+    targetAssistantMessage = message
+    break
+  }
+
+  if (targetAssistantIndex === -1 || !targetAssistantMessage) return null
+
+  // 2) Any compact after that assistant (up to the end of the dialog) means
+  // this assistant is already behind compact and cannot be a rollback target.
+  for (let i = targetAssistantIndex; i < totalMessageCount; i++) {
+    const message = getMessageAt(i)
+    if (!message || message.role !== "assistant") continue
+    if (hasCompactToolUsePart(message.parts)) {
+      return null
+    }
+  }
+
+  // 3) No compact after target assistant: allow rollback only if target has SDK UUID.
+  const sdkUuid = (targetAssistantMessage.metadata as any)?.sdkMessageUuid
+  return typeof sdkUuid === "string" && sdkUuid.length > 0 ? sdkUuid : null
+}
+
+// SDK UUID of the assistant message that rollback should target for this user message.
+// Returns null when this turn cannot be rolled back.
+export const rollbackTargetSdkUuidForUserMsgAtomFamily = atomFamily((userMsgId: string) =>
+  atom((get) => {
+    const ids = get(messageIdsAtom)
+    const roles = get(messageRolesAtom)
+    const userMsgIndex = ids.indexOf(userMsgId)
+
+    if (userMsgIndex <= 0) return null
+
+    return findRollbackTargetSdkUuidForUserIndex(userMsgIndex, ids.length, (index) => {
+      const messageId = ids[index]
+      if (!messageId) return null
+
+      const role = roles.get(messageId)
+      if (!role) return null
+
+      if (role !== "assistant") {
+        return { role }
+      }
+
+      return get(messageAtomFamily(messageId))
+    })
+  })
+)
+
 // ============================================================================
 // STREAMING STATUS
 // ============================================================================

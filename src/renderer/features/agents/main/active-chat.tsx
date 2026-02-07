@@ -188,7 +188,12 @@ import {
 } from "../search"
 import { agentChatStore } from "../stores/agent-chat-store"
 import { EMPTY_QUEUE, useMessageQueueStore } from "../stores/message-queue-store"
-import { clearSubChatCaches, isRollingBackAtom, syncMessagesWithStatusAtom } from "../stores/message-store"
+import {
+  clearSubChatCaches,
+  findRollbackTargetSdkUuidForUserIndex,
+  isRollingBackAtom,
+  syncMessagesWithStatusAtom
+} from "../stores/message-store"
 import { useStreamingStatusStore } from "../stores/streaming-status-store"
 import {
   useAgentSubChatStore,
@@ -3131,23 +3136,14 @@ const ChatViewInner = memo(function ChatViewInner({
         return
       }
 
-      // Find the last assistant message BEFORE this user message
-      let targetAssistantMsg: (typeof messages)[0] | null = null
-      for (let i = userMsgIndex - 1; i >= 0; i--) {
-        if (messages[i].role === "assistant") {
-          targetAssistantMsg = messages[i]
-          break
-        }
-      }
+      const sdkUuid = findRollbackTargetSdkUuidForUserIndex(
+        userMsgIndex,
+        messages.length,
+        (index) => messages[index] as any,
+      )
 
-      if (!targetAssistantMsg) {
-        toast.error("Cannot rollback: no previous assistant message found")
-        return
-      }
-
-      const sdkUuid = (targetAssistantMsg.metadata as any)?.sdkMessageUuid
       if (!sdkUuid) {
-        toast.error("Cannot rollback: message has no SDK UUID")
+        toast.error("Cannot rollback: this turn is not rollbackable")
         return
       }
 

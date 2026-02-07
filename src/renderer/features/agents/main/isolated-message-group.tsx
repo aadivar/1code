@@ -6,7 +6,7 @@ import {
   messageAtomFamily,
   assistantIdsForUserMsgAtomFamily,
   isLastUserMessageAtomFamily,
-  isFirstUserMessageAtomFamily,
+  rollbackTargetSdkUuidForUserMsgAtomFamily,
   isStreamingAtom,
   isRollingBackAtom,
 } from "../stores/message-store"
@@ -101,12 +101,12 @@ export const IsolatedMessageGroup = memo(function IsolatedMessageGroup({
   const userMsg = useAtomValue(messageAtomFamily(userMsgId))
   const assistantIds = useAtomValue(assistantIdsForUserMsgAtomFamily(userMsgId))
   const isLastGroup = useAtomValue(isLastUserMessageAtomFamily(userMsgId))
-  const isFirstUserMessage = useAtomValue(isFirstUserMessageAtomFamily(userMsgId))
+  const rollbackTargetSdkUuid = useAtomValue(rollbackTargetSdkUuidForUserMsgAtomFamily(userMsgId))
   const isStreaming = useAtomValue(isStreamingAtom)
   const isRollingBack = useAtomValue(isRollingBackAtom)
 
-  // Show rollback button on non-first user messages (first has no preceding assistant to roll back to)
-  const canRollback = onRollback && !isFirstUserMessage && !isStreaming
+  // Show rollback button only when this user turn has a valid rollback target.
+  const canRollback = onRollback && !!rollbackTargetSdkUuid && !isStreaming
 
   // Extract user message content
   // Note: file-content parts are hidden from UI but sent to agent

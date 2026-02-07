@@ -1776,11 +1776,13 @@ ${prompt}
             let policyRetryCount = 0
             let policyRetryNeeded = false
             let messageCount = 0
+            let pendingFinishChunk: UIMessageChunk | null = null
 
             // eslint-disable-next-line no-constant-condition
             while (true) {
               policyRetryNeeded = false
               messageCount = 0
+              pendingFinishChunk = null
 
               // 5. Run Claude SDK
               let stream
@@ -2086,6 +2088,14 @@ ${prompt}
                         ...chunk.messageMetadata,
                         sdkMessageUuid: metadata.sdkMessageUuid,
                       }
+                    }
+
+                    // IMPORTANT: Defer the protocol "finish" chunk until after DB persistence.
+                    // If we emit finish early, the UI can send the next user message before
+                    // this assistant message is written, and the next save overwrites it.
+                    if (chunk.type === "finish") {
+                      pendingFinishChunk = chunk
+                      continue
                     }
 
                     // Use safeEmit to prevent throws when observer is closed
@@ -2466,6 +2476,12 @@ ${prompt}
             console.log(
               `[SD] M:END sub=${subId} reason=ok n=${chunkCount} last=${lastChunkType} t=${duration}s`,
             )
+            if (pendingFinishChunk) {
+              safeEmit(pendingFinishChunk)
+            } else {
+              // Keep protocol invariant for consumers that wait for finish.
+              safeEmit({ type: "finish" } as UIMessageChunk)
+            }
             safeComplete()
           } catch (error) {
             const duration = ((Date.now() - streamStart) / 1000).toFixed(1)

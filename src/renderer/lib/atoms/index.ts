@@ -364,7 +364,7 @@ export const activeConfigAtom = atom((get) => {
 // Note: Extended thinking disables response streaming
 export const extendedThinkingEnabledAtom = atomWithStorage<boolean>(
   "preferences:extended-thinking-enabled",
-  false,
+  true,
   undefined,
   { getOnInit: true },
 )

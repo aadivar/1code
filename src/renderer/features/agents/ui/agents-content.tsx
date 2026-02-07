@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useAtom, useAtomValue, useSetAtom } from "jotai"
+import { useQuery } from "@tanstack/react-query"
 // import { useSearchParams, useRouter } from "next/navigation" // Desktop doesn't use next/navigation
 // Desktop: mock Next.js navigation hooks
 const useSearchParams = () => ({ get: () => null })
@@ -61,6 +62,7 @@ import { AlignJustify } from "lucide-react"
 import { AgentsQuickSwitchDialog } from "../components/agents-quick-switch-dialog"
 import { SubChatsQuickSwitchDialog } from "../components/subchats-quick-switch-dialog"
 import { isDesktopApp } from "../../../lib/utils/platform"
+import { remoteTrpc } from "../../../lib/remote-trpc"
 import { SettingsContent } from "../../settings/settings-content"
 // Desktop mock
 const useIsAdmin = () => false
@@ -75,7 +77,7 @@ export function AgentsContent() {
   const selectedDraftId = useAtomValue(selectedDraftIdAtom)
   const showNewChatForm = useAtomValue(showNewChatFormAtom)
   const betaKanbanEnabled = useAtomValue(betaKanbanEnabledAtom)
-  const betaAutomationsEnabled = useAtomValue(betaAutomationsEnabledAtom)
+  const [betaAutomationsEnabled, setBetaAutomationsEnabled] = useAtom(betaAutomationsEnabledAtom)
   const [selectedTeamId] = useAtom(selectedTeamIdAtom)
   const [sidebarOpen, setSidebarOpen] = useAtom(agentsSidebarOpenAtom)
   const [previewSidebarOpen, setPreviewSidebarOpen] = useAtom(
@@ -171,6 +173,24 @@ export function AgentsContent() {
     enabled: !!selectedTeamId,
   })
   const selectedTeam = teams?.find((t: any) => t.id === selectedTeamId) as any
+
+  // Auto-activate automations & inbox if user has any automations configured
+  // One-shot check on app startup — no refetches, no polling
+  const { data: automationsData } = useQuery({
+    queryKey: ["automations", "autoActivateCheck", selectedTeamId],
+    queryFn: () => remoteTrpc.automations.listAutomations.query({ teamId: selectedTeamId! }),
+    enabled: !!selectedTeamId && !betaAutomationsEnabled,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    retry: 1,
+  })
+
+  useEffect(() => {
+    if (!betaAutomationsEnabled && automationsData && automationsData.length > 0) {
+      setBetaAutomationsEnabled(true)
+    }
+  }, [betaAutomationsEnabled, automationsData, setBetaAutomationsEnabled])
 
   // Fetch agent chats for keyboard navigation and mobile view
   const { data: agentChats } = api.agents.getAgentChats.useQuery(
