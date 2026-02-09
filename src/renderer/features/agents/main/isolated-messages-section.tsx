@@ -2,7 +2,7 @@
 
 import { memo } from "react"
 import { useAtomValue } from "jotai"
-import { userMessageIdsAtom, currentSubChatIdAtom } from "../stores/message-store"
+import { userMessageIdsPerChatAtom } from "../stores/message-store"
 import { IsolatedMessageGroup } from "./isolated-message-group"
 
 // ============================================================================
@@ -78,26 +78,9 @@ export const IsolatedMessagesSection = memo(function IsolatedMessagesSection({
   MessageGroupWrapper,
   toolRegistry,
 }: IsolatedMessagesSectionProps) {
-  // CRITICAL: Check if global atoms are synced for THIS subChat FIRST
-  // With keep-alive tabs, multiple ChatViewInner instances exist simultaneously.
-  // Global atoms (messageIdsAtom, etc.) contain data from the ACTIVE tab only.
-  // When a tab becomes active, useLayoutEffect syncs its messages to global atoms,
-  // but that happens AFTER this component renders. So on first render after activation,
-  // we might read stale data from the previous active tab.
-  //
-  // Solution: Check currentSubChatIdAtom BEFORE reading userMessageIdsAtom.
-  // If it doesn't match our subChatId, return empty to avoid showing wrong messages.
-  // The useLayoutEffect will sync and update currentSubChatIdAtom, which triggers
-  // a re-render of this component (since we're subscribed to it).
-  const currentSubChatId = useAtomValue(currentSubChatIdAtom)
-
-  // Subscribe to user message IDs - but only use them if we're the active chat
-  const userMsgIds = useAtomValue(userMessageIdsAtom)
-
-  if (currentSubChatId !== subChatId) {
-    // Data not synced yet - render nothing, we'll re-render when currentSubChatIdAtom updates
-    return null
-  }
+  // Per-subChat atom: each subChat reads its own message IDs.
+  // This supports split view where multiple panes render simultaneously.
+  const userMsgIds = useAtomValue(userMessageIdsPerChatAtom(subChatId))
 
   return (
     <>

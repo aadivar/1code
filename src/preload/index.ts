@@ -107,7 +107,7 @@ contextBridge.exposeInMainWorld("desktopApi", {
   getZoom: () => ipcRenderer.invoke("window:get-zoom"),
 
   // Multi-window
-  newWindow: (options?: { chatId?: string; subChatId?: string }) => ipcRenderer.invoke("window:new", options),
+  newWindow: (options?: { chatId?: string; subChatId?: string; splitPaneIds?: string[] }) => ipcRenderer.invoke("window:new", options),
   setWindowTitle: (title: string) => ipcRenderer.invoke("window:set-title", title),
 
   // DevTools
@@ -307,7 +307,7 @@ export interface DesktopApi {
   zoomReset: () => Promise<void>
   getZoom: () => Promise<number>
   // Multi-window
-  newWindow: (options?: { chatId?: string; subChatId?: string }) => Promise<void>
+  newWindow: (options?: { chatId?: string; subChatId?: string; splitPaneIds?: string[] }) => Promise<void>
   setWindowTitle: (title: string) => Promise<void>
   toggleDevTools: () => Promise<void>
   unlockDevTools: () => Promise<void>

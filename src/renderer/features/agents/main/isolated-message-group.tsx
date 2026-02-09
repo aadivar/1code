@@ -4,9 +4,9 @@ import { memo, useMemo } from "react"
 import { useAtomValue } from "jotai"
 import {
   messageAtomFamily,
-  assistantIdsForUserMsgAtomFamily,
-  isLastUserMessageAtomFamily,
-  rollbackTargetSdkUuidForUserMsgAtomFamily,
+  assistantIdsPerChatAtomFamily,
+  isLastUserMessagePerChatAtomFamily,
+  rollbackTargetPerChatAtomFamily,
   isStreamingAtom,
   isRollingBackAtom,
 } from "../stores/message-store"
@@ -98,10 +98,12 @@ export const IsolatedMessageGroup = memo(function IsolatedMessageGroup({
   toolRegistry,
 }: IsolatedMessageGroupProps) {
   // Subscribe to specific atoms - NOT the whole messages array
+  // Use per-subChat families so split view panes render independently
+  const perChatKey = `${subChatId}:${userMsgId}`
   const userMsg = useAtomValue(messageAtomFamily(userMsgId))
-  const assistantIds = useAtomValue(assistantIdsForUserMsgAtomFamily(userMsgId))
-  const isLastGroup = useAtomValue(isLastUserMessageAtomFamily(userMsgId))
-  const rollbackTargetSdkUuid = useAtomValue(rollbackTargetSdkUuidForUserMsgAtomFamily(userMsgId))
+  const assistantIds = useAtomValue(assistantIdsPerChatAtomFamily(perChatKey))
+  const isLastGroup = useAtomValue(isLastUserMessagePerChatAtomFamily(perChatKey))
+  const rollbackTargetSdkUuid = useAtomValue(rollbackTargetPerChatAtomFamily(perChatKey))
   const isStreaming = useAtomValue(isStreamingAtom)
   const isRollingBack = useAtomValue(isRollingBackAtom)
 

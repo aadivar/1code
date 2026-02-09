@@ -36,6 +36,15 @@ export function createTransformer(options?: { isUsingOllama?: boolean }) {
   let inThinkingBlock = false // Track if we're currently in a thinking block
   let thinkingJsonStarted = false // Track if we've sent the JSON prefix for thinking deltas
 
+  // Track usage from the last main assistant message (exclude sidechain/subagents).
+  // This is used for accurate context window display in final metadata.
+  let lastMainAssistantUsage: {
+    input_tokens: number
+    cache_read_input_tokens: number
+    cache_creation_input_tokens: number
+    output_tokens: number
+  } | null = null
+
   // Helper to create composite toolCallId: "parentId:childId" or just "childId"
   const makeCompositeId = (originalId: string, parentId: string | null): string => {
     if (parentId) return `${parentId}:${originalId}`
@@ -233,6 +242,17 @@ export function createTransformer(options?: { isUsingOllama?: boolean }) {
       }
     }
 
+    // Track per-turn usage from main assistant messages only.
+    // Sidechain/subagent assistant messages have parent_tool_use_id set.
+    if (msg.type === "assistant" && msg.message?.usage && msg.parent_tool_use_id == null) {
+      lastMainAssistantUsage = {
+        input_tokens: msg.message.usage.input_tokens ?? 0,
+        cache_read_input_tokens: msg.message.usage.cache_read_input_tokens ?? 0,
+        cache_creation_input_tokens: msg.message.usage.cache_creation_input_tokens ?? 0,
+        output_tokens: msg.message.usage.output_tokens ?? 0,
+      }
+    }
+
     // ===== ASSISTANT MESSAGE (complete, often with tool_use) =====
     // When streaming is enabled, text arrives via stream_event, not here
     if (msg.type === "assistant" && msg.message?.content) {
@@ -410,51 +430,25 @@ export function createTransformer(options?: { isUsingOllama?: boolean }) {
       yield* endTextBlock()
       yield* endToolInput()
 
-      const inputTokens = msg.usage?.input_tokens
-      const outputTokens = msg.usage?.output_tokens
+      const resultOutputTokens = msg.usage?.output_tokens
+      const fallbackUsage = {
+        input_tokens: msg.usage?.input_tokens ?? 0,
+        cache_read_input_tokens: msg.usage?.cache_read_input_tokens ?? 0,
+        cache_creation_input_tokens: msg.usage?.cache_creation_input_tokens ?? 0,
+        output_tokens: resultOutputTokens ?? 0,
+      }
 
-      // Extract per-model usage from SDK (if available)
-      const modelUsage = msg.modelUsage
-        ? Object.fromEntries(
-            Object.entries(msg.modelUsage).map(([model, usage]: [string, any]) => [
-              model,
-              {
-                inputTokens: usage.inputTokens || 0,
-                outputTokens: usage.outputTokens || 0,
-                cacheReadInputTokens: usage.cacheReadInputTokens || 0,
-                cacheCreationInputTokens: usage.cacheCreationInputTokens || 0,
-                costUSD: usage.costUSD || 0,
-              },
-            ])
-          )
-        : undefined
+      // Prefer the last main assistant usage snapshot for context metrics.
+      // Fallback to result usage when assistant usage is unavailable.
+      const usage = lastMainAssistantUsage ?? fallbackUsage
 
-      // Fallback: if SDK didn't populate msg.usage, derive totals from modelUsage
-      const fallbackInputTokens = msg.modelUsage
-        ? Object.values(msg.modelUsage).reduce(
-            (sum: number, usage: any) => sum + (usage?.inputTokens || 0),
-            0,
-          )
-        : undefined
-      const fallbackOutputTokens = msg.modelUsage
-        ? Object.values(msg.modelUsage).reduce(
-            (sum: number, usage: any) => sum + (usage?.outputTokens || 0),
-            0,
-          )
-        : undefined
-
-      const resolvedInputTokens =
-        inputTokens == null || (inputTokens === 0 && (fallbackInputTokens || 0) > 0)
-          ? fallbackInputTokens
-          : inputTokens
-      const resolvedOutputTokens =
-        outputTokens == null || (outputTokens === 0 && (fallbackOutputTokens || 0) > 0)
-          ? fallbackOutputTokens
-          : outputTokens
-
+      const resolvedInputTokens = usage.input_tokens
+      const resolvedOutputTokens = resultOutputTokens ?? usage.output_tokens
       const metadata: MessageMetadata = {
         sessionId: msg.session_id,
         inputTokens: resolvedInputTokens,
+        cacheReadInputTokens: usage.cache_read_input_tokens,
+        cacheCreationInputTokens: usage.cache_creation_input_tokens,
         outputTokens: resolvedOutputTokens,
         totalTokens:
           resolvedInputTokens != null && resolvedOutputTokens != null
@@ -465,8 +459,6 @@ export function createTransformer(options?: { isUsingOllama?: boolean }) {
         resultSubtype: msg.subtype || "success",
         // Include finalTextId for collapsing tools when there's a final response
         finalTextId: lastTextId || undefined,
-        // Per-model usage breakdown
-        modelUsage,
       }
       yield { type: "message-metadata", messageMetadata: metadata }
       yield { type: "finish-step" }

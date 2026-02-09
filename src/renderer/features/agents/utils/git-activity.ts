@@ -155,10 +155,28 @@ function countLines(text: string): number {
 }
 
 /**
+ * Convert absolute file path to relative path from project root.
+ * Falls back to basename if project path doesn't match.
+ */
+function toRelativePath(filePath: string, projectPath?: string): string {
+  if (projectPath && filePath.startsWith(projectPath)) {
+    const relative = filePath.slice(projectPath.length)
+    return relative.startsWith("/") ? relative.slice(1) : relative
+  }
+  // Handle worktree paths: /Users/.../.21st/worktrees/{chatId}/{subChatId}/relativePath
+  const worktreeMatch = filePath.match(/\.21st\/worktrees\/[^/]+\/[^/]+\/(.+)$/)
+  if (worktreeMatch) {
+    return worktreeMatch[1]!
+  }
+  return filePath.split("/").pop() || filePath
+}
+
+/**
  * Extract changed files from Edit/Write tool parts in a message.
  * Tracks additions and deletions per file.
+ * @param projectPath - project root path for computing relative display paths
  */
-export function extractChangedFiles(parts: any[]): ChangedFileInfo[] {
+export function extractChangedFiles(parts: any[], projectPath?: string): ChangedFileInfo[] {
   const fileMap = new Map<string, ChangedFileInfo>()
 
   for (const part of parts) {
@@ -169,8 +187,8 @@ export function extractChangedFiles(parts: any[]): ChangedFileInfo[] {
     // Skip session/plan files
     if (filePath.includes("claude-sessions") || filePath.includes("Application Support")) continue
 
-    // Use basename as display, full path as key
-    const displayPath = filePath.split("/").pop() || filePath
+    // Use relative path as display, full path as key
+    const displayPath = toRelativePath(filePath, projectPath)
 
     const existing = fileMap.get(filePath)
 

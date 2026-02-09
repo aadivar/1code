@@ -68,24 +68,16 @@ export type MCPServer = {
   error?: string
 }
 
-export type ModelUsageEntry = {
-  inputTokens: number
-  outputTokens: number
-  cacheReadInputTokens: number
-  cacheCreationInputTokens: number
-  costUSD: number
-}
-
 export type MessageMetadata = {
   sessionId?: string
   sdkMessageUuid?: string // SDK's message UUID for resumeSessionAt (rollback support)
   inputTokens?: number
+  cacheReadInputTokens?: number
+  cacheCreationInputTokens?: number
   outputTokens?: number
   totalTokens?: number
   totalCostUsd?: number
   durationMs?: number
   resultSubtype?: string
   finalTextId?: string
-  // Per-model usage breakdown from SDK (model name -> usage)
-  modelUsage?: Record<string, ModelUsageEntry>
 }

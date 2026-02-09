@@ -20,23 +20,31 @@ interface ReleaseHighlight {
   title: string
 }
 
-function parseFirstHighlight(content: string): string {
-  const lines = content.split("\n")
-  let inFeatures = false
+function parseFirstItemFromSection(lines: string[], sectionPattern: RegExp): string | null {
+  let inSection = false
   for (const line of lines) {
-    if (/^###\s+Features/i.test(line)) {
-      inFeatures = true
+    if (sectionPattern.test(line)) {
+      inSection = true
       continue
     }
-    if (inFeatures && /^###?\s+/.test(line)) break
-    if (inFeatures) {
+    if (inSection && /^###?\s+/.test(line)) break
+    if (inSection) {
       const bold = line.match(/^[-*]\s+\*\*(.+?)\*\*/)
       if (bold) return bold[1]
       const plain = line.match(/^[-*]\s+(.+)/)
       if (plain) return plain[1].replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").trim()
     }
   }
-  return "Bug fixes & improvements"
+  return null
+}
+
+function parseFirstHighlight(content: string): string {
+  const lines = content.split("\n")
+  return (
+    parseFirstItemFromSection(lines, /^###\s+Features/i) ??
+    parseFirstItemFromSection(lines, /^###\s+Improvements/i) ??
+    "Bug fixes & improvements"
+  )
 }
 
 interface AgentsHelpPopoverProps {

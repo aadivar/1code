@@ -20,6 +20,8 @@ import {
   filteredSubChatIdAtom,
   selectedCommitAtom,
   diffActiveTabAtom,
+  agentsFocusedDiffFileAtom,
+  selectedDiffFilePathAtom,
 } from "../atoms"
 import { cn } from "../../../lib/utils"
 import { getFileIconByExtension } from "../mentions/agents-file-mention"
@@ -42,12 +44,14 @@ export const GitActivityBadges = memo(function GitActivityBadges({
   const setFilteredSubChatId = useSetAtom(filteredSubChatIdAtom)
   const setSelectedCommit = useSetAtom(selectedCommitAtom)
   const setDiffActiveTab = useSetAtom(diffActiveTabAtom)
+  const setSelectedFilePath = useSetAtom(selectedDiffFilePathAtom)
+  const setFocusedDiffFile = useSetAtom(agentsFocusedDiffFileAtom)
   const onOpenFile = useFileOpen()
 
   const [isExpanded, setIsExpanded] = useState(false)
 
   const activity = useMemo(() => extractGitActivity(parts), [parts])
-  const changedFiles = useMemo(() => extractChangedFiles(parts), [parts])
+  const changedFiles = useMemo(() => extractChangedFiles(parts, selectedProject?.path), [parts, selectedProject?.path])
 
   const totals = useMemo(() => {
     let additions = 0
@@ -86,9 +90,22 @@ export const GitActivityBadges = memo(function GitActivityBadges({
     setDiffSidebarOpen(true)
   }, [activity, subChatId, selectedProject, setSelectedCommit, setFilteredDiffFiles, setFilteredSubChatId, setDiffActiveTab, setDiffSidebarOpen])
 
+  const filesCommitted = activity?.type === "commit" || activity?.type === "pr"
+
   const handleFileClick = useCallback((file: ChangedFileInfo) => {
-    onOpenFile?.(file.filePath)
-  }, [onOpenFile])
+    if (filesCommitted) {
+      // Files already committed — open file preview
+      onOpenFile?.(file.filePath)
+    } else {
+      // Files not yet committed — open diff view with this file selected
+      setSelectedFilePath(file.displayPath)
+      setFilteredDiffFiles([file.displayPath])
+      setFocusedDiffFile(file.displayPath)
+      setFilteredSubChatId(subChatId)
+      setDiffActiveTab("changes")
+      setDiffSidebarOpen(true)
+    }
+  }, [filesCommitted, onOpenFile, subChatId, setSelectedFilePath, setFilteredDiffFiles, setFocusedDiffFile, setFilteredSubChatId, setDiffActiveTab, setDiffSidebarOpen])
 
   if (!activity && changedFiles.length === 0) return null
 

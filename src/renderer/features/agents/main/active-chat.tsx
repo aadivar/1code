@@ -218,6 +218,7 @@ import { AgentsHeaderControls } from "../ui/agents-header-controls"
 import { ChatTitleEditor } from "../ui/chat-title-editor"
 import { MobileChatHeader } from "../ui/mobile-chat-header"
 import { QuickCommentInput } from "../ui/quick-comment-input"
+import { SplitViewContainer } from "../ui/split-view-container"
 import { SubChatSelector } from "../ui/sub-chat-selector"
 import { SubChatStatusCard } from "../ui/sub-chat-status-card"
 import { TextSelectionPopover } from "../ui/text-selection-popover"
@@ -1914,6 +1915,7 @@ const ChatViewInner = memo(function ChatViewInner({
   onRestoreWorkspace,
   existingPrUrl,
   isActive = true,
+  isSplitPane = false,
 }: {
   chat: Chat<any>
   subChatId: string
@@ -1936,6 +1938,7 @@ const ChatViewInner = memo(function ChatViewInner({
   onRestoreWorkspace?: () => void
   existingPrUrl?: string | null
   isActive?: boolean
+  isSplitPane?: boolean
 }) {
   const hasTriggeredRenameRef = useRef(false)
   const hasTriggeredAutoGenerateRef = useRef(false)
@@ -2505,7 +2508,7 @@ const ChatViewInner = memo(function ChatViewInner({
   const [pendingPrMessage, setPendingPrMessage] = useAtom(pendingPrMessageAtom)
 
   useEffect(() => {
-    if (pendingPrMessage?.subChatId === subChatId && !isStreaming && isActive) {
+    if (pendingPrMessage?.subChatId === subChatId && !isStreaming && isActive && !isSplitPane) {
       // Clear the pending message immediately to prevent double-sending
       setPendingPrMessage(null)
 
@@ -2523,7 +2526,7 @@ const ChatViewInner = memo(function ChatViewInner({
       store.addToOpenSubChats(subChatId)
       store.setActiveSubChat(subChatId)
     }
-  }, [pendingPrMessage, isStreaming, isActive, sendMessage, setPendingPrMessage, setIsCreatingPr, subChatId])
+  }, [pendingPrMessage, isStreaming, isActive, isSplitPane, sendMessage, setPendingPrMessage, setIsCreatingPr, subChatId])
 
   // Watch for pending Review message and send it
   const [pendingReviewMessage, setPendingReviewMessage] = useAtom(
@@ -2531,7 +2534,7 @@ const ChatViewInner = memo(function ChatViewInner({
   )
 
   useEffect(() => {
-    if (pendingReviewMessage && !isStreaming && isActive) {
+    if (pendingReviewMessage && !isStreaming && isActive && !isSplitPane) {
       // Clear the pending message immediately to prevent double-sending
       setPendingReviewMessage(null)
 
@@ -2541,7 +2544,7 @@ const ChatViewInner = memo(function ChatViewInner({
         parts: [{ type: "text", text: pendingReviewMessage }],
       })
     }
-  }, [pendingReviewMessage, isStreaming, isActive, sendMessage, setPendingReviewMessage])
+  }, [pendingReviewMessage, isStreaming, isActive, isSplitPane, sendMessage, setPendingReviewMessage])
 
   // Watch for pending conflict resolution message and send it
   const [pendingConflictMessage, setPendingConflictMessage] = useAtom(
@@ -2549,7 +2552,7 @@ const ChatViewInner = memo(function ChatViewInner({
   )
 
   useEffect(() => {
-    if (pendingConflictMessage && !isStreaming && isActive) {
+    if (pendingConflictMessage && !isStreaming && isActive && !isSplitPane) {
       // Clear the pending message immediately to prevent double-sending
       setPendingConflictMessage(null)
 
@@ -2559,7 +2562,7 @@ const ChatViewInner = memo(function ChatViewInner({
         parts: [{ type: "text", text: pendingConflictMessage }],
       })
     }
-  }, [pendingConflictMessage, isStreaming, isActive, sendMessage, setPendingConflictMessage])
+  }, [pendingConflictMessage, isStreaming, isActive, isSplitPane, sendMessage, setPendingConflictMessage])
 
   // Handle pending "Build plan" from sidebar (atom - effect is defined after handleApprovePlan)
   const [pendingBuildPlanSubChatId, setPendingBuildPlanSubChatId] = useAtom(
@@ -2592,38 +2595,35 @@ const ChatViewInner = memo(function ChatViewInner({
     [messages],
   )
 
-  // Pre-compute token data for ChatInputArea to avoid passing unstable messages array
-  // This prevents ChatInputArea from re-rendering on every streaming chunk
-  // NOTE: Tokens are counted since the last completed compact boundary.
+  // Pre-compute token data for ChatInputArea to avoid passing unstable messages array.
+  // Context usage follows Claude SDK semantics: use the latest assistant turn's
+  // context size (input + cache), not cumulative sums across historical turns.
   const messageTokenData = useMemo(() => {
-    let startIndex = 0
-    for (let i = 0; i < messages.length; i++) {
-      const msg = messages[i]
-      const parts = (msg as any)?.parts as Array<{ type?: string; state?: string }> | undefined
-      if (
-        parts?.some(
-          (part) =>
-            part.type === "tool-Compact" &&
-            (part.state === "output-available" || part.state === "result"),
-        )
-      ) {
-        // Include the compact result itself in the token window
-        startIndex = i
-      }
-    }
+    const lastAssistantWithMetadata = [...messages]
+      .reverse()
+      .find((msg) => msg.role === "assistant" && !!msg.metadata)
 
-    let totalInputTokens = 0
-    let totalOutputTokens = 0
-    let totalCostUsd = 0
-    for (let i = startIndex; i < messages.length; i++) {
-      const msg = messages[i]
-      if (msg.metadata) {
-        totalInputTokens += msg.metadata.inputTokens || 0
-        totalOutputTokens += msg.metadata.outputTokens || 0
-        totalCostUsd += msg.metadata.totalCostUsd || 0
-      }
-    }
-    const messageCount = Math.max(0, messages.length - startIndex)
+    const metadata = lastAssistantWithMetadata?.metadata as
+      | {
+          inputTokens?: number
+          outputTokens?: number
+          totalCostUsd?: number
+          cacheReadInputTokens?: number
+          cacheCreationInputTokens?: number
+        }
+      | undefined
+
+    const cacheReadInputTokens = metadata?.cacheReadInputTokens || 0
+    const cacheCreationInputTokens = metadata?.cacheCreationInputTokens || 0
+
+    const totalInputTokens =
+      (metadata?.inputTokens || 0) + cacheReadInputTokens + cacheCreationInputTokens
+    const totalOutputTokens = metadata?.outputTokens || 0
+    const totalCostUsd = metadata?.totalCostUsd || 0
+
+    // Keep this tied to rendered messages for memo comparator stability.
+    const messageCount = messages.length
+
     return {
       totalInputTokens,
       totalOutputTokens,
@@ -3019,11 +3019,11 @@ const ChatViewInner = memo(function ChatViewInner({
   // Handle pending "Build plan" from sidebar
   useEffect(() => {
     // Only trigger if this is the target sub-chat and we're active
-    if (pendingBuildPlanSubChatId === subChatId && isActive) {
+    if (pendingBuildPlanSubChatId === subChatId && isActive && !isSplitPane) {
       setPendingBuildPlanSubChatId(null) // Clear immediately to prevent double-trigger
       handleApprovePlan()
     }
-  }, [pendingBuildPlanSubChatId, subChatId, isActive, setPendingBuildPlanSubChatId, handleApprovePlan])
+  }, [pendingBuildPlanSubChatId, subChatId, isActive, isSplitPane, setPendingBuildPlanSubChatId, handleApprovePlan])
 
   // Detect PR URLs in assistant messages and store them
   // Initialize with existing PR URL to prevent duplicate toast on re-mount
@@ -4960,12 +4960,14 @@ export function ChatView({
     openSubChatIds,
     pinnedSubChatIds,
     allSubChats,
+    splitPaneIds,
   } = useAgentSubChatStore(
     useShallow((state) => ({
       activeSubChatId: state.activeSubChatId,
       openSubChatIds: state.openSubChatIds,
       pinnedSubChatIds: state.pinnedSubChatIds,
       allSubChats: state.allSubChats,
+      splitPaneIds: state.splitPaneIds,
     }))
   )
 
@@ -5096,7 +5098,7 @@ export function ChatView({
   // Workspace isolation: limit mounted tabs to prevent memory growth
   // CRITICAL: Filter by workspace to prevent rendering sub-chats from other workspaces
   // Always render: active + pinned, then fill with recent up to limit
-  const MAX_MOUNTED_TABS = 5
+  const MAX_MOUNTED_TABS = Math.max(5, splitPaneIds.length + 2)
   const tabsToRender = useMemo(() => {
     if (!activeSubChatId) return []
 
@@ -5124,6 +5126,13 @@ export function ChatView({
     // Start with active (must always be mounted)
     const mustRender = new Set([activeSubChatId])
 
+    // Ensure all split panes are always mounted
+    for (const paneId of splitPaneIds) {
+      if (validSubChatIds.has(paneId)) {
+        mustRender.add(paneId)
+      }
+    }
+
     // Add pinned tabs (only valid ones)
     for (const id of validPinnedIds) {
       mustRender.add(id)
@@ -5148,8 +5157,14 @@ export function ChatView({
     if (!result.includes(activeSubChatId)) {
       result.unshift(activeSubChatId)
     }
+    // Also ensure split pane tabs are in the result
+    for (const paneId of splitPaneIds) {
+      if (validSubChatIds.has(paneId) && !result.includes(paneId)) {
+        result.push(paneId)
+      }
+    }
     return result
-  }, [activeSubChatId, pinnedSubChatIds, openSubChatIds, allSubChats, agentSubChats])
+  }, [activeSubChatId, splitPaneIds, pinnedSubChatIds, openSubChatIds, allSubChats, agentSubChats])
 
   // Get PR status when PR exists (for checking if it's open/merged/closed)
   const hasPrNumber = !!agentChat?.prNumber
@@ -6924,7 +6939,87 @@ Make sure to preserve all functionality from both branches when resolving confli
                 <div className="flex items-center justify-center h-full">
                   <IconSpinner className="h-6 w-6 animate-spin" />
                 </div>
+              ) : splitPaneIds.length >= 2 && splitPaneIds.includes(activeSubChatId) ? (
+                // SPLIT VIEW: active tab is part of the split group — show N panes
+                <SplitViewContainer
+                  panes={splitPaneIds.map(paneId => {
+                    const chat = getOrCreateChat(paneId)
+                    const isFirstSubChat = getFirstSubChatId(agentSubChats) === paneId
+                    return {
+                      id: paneId,
+                      content: chat ? (
+                        <ChatViewInner
+                          chat={chat}
+                          subChatId={paneId}
+                          parentChatId={chatId}
+                          isFirstSubChat={isFirstSubChat}
+                          onAutoRename={handleAutoRename}
+                          onCreateNewSubChat={handleCreateNewSubChat}
+                          teamId={selectedTeamId || undefined}
+                          repository={repository}
+                          streamId={agentChatStore.getStreamId(paneId)}
+                          isMobile={isMobileFullscreen}
+                          isSubChatsSidebarOpen={subChatsSidebarMode === "sidebar"}
+                          sandboxId={sandboxId || undefined}
+                          projectPath={worktreePath || undefined}
+                          isArchived={isArchived}
+                          onRestoreWorkspace={handleRestoreWorkspace}
+                          existingPrUrl={agentChat?.prUrl}
+                          isActive={true}
+                          isSplitPane={true}
+                        />
+                      ) : null,
+                    }
+                  })}
+                  hiddenTabs={
+                    <>
+                      {tabsToRender
+                        .filter(id => !splitPaneIds.includes(id))
+                        .map(subChatId => {
+                          const chat = getOrCreateChat(subChatId)
+                          const isFirstSubChat = getFirstSubChatId(agentSubChats) === subChatId
+                          const belongsToWorkspace = agentSubChats.some(sc => sc.id === subChatId) ||
+                                                    allSubChats.some(sc => sc.id === subChatId)
+                          if (!chat || !belongsToWorkspace) return null
+                          return (
+                            <div
+                              key={subChatId}
+                              className="absolute inset-0 flex flex-col"
+                              style={{
+                                opacity: 0,
+                                pointerEvents: "none",
+                                contain: "layout style paint",
+                              }}
+                              aria-hidden
+                            >
+                              <ChatViewInner
+                                chat={chat}
+                                subChatId={subChatId}
+                                parentChatId={chatId}
+                                isFirstSubChat={isFirstSubChat}
+                                onAutoRename={handleAutoRename}
+                                onCreateNewSubChat={handleCreateNewSubChat}
+                                teamId={selectedTeamId || undefined}
+                                repository={repository}
+                                streamId={agentChatStore.getStreamId(subChatId)}
+                                isMobile={isMobileFullscreen}
+                                isSubChatsSidebarOpen={subChatsSidebarMode === "sidebar"}
+                                sandboxId={sandboxId || undefined}
+                                projectPath={worktreePath || undefined}
+                                isArchived={isArchived}
+                                onRestoreWorkspace={handleRestoreWorkspace}
+                                existingPrUrl={agentChat?.prUrl}
+                                isActive={false}
+                              />
+                            </div>
+                          )
+                        })}
+                    </>
+                  }
+                  onCloseSplit={() => useAgentSubChatStore.getState().closeSplit()}
+                />
               ) : (
+                // NORMAL VIEW: stack all tabs, show only active
                 tabsToRender.map(subChatId => {
                 const chat = getOrCreateChat(subChatId)
                 const isActive = subChatId === activeSubChatId
@@ -6943,15 +7038,11 @@ Make sure to preserve all functionality from both branches when resolving confli
                     key={subChatId}
                     className="absolute inset-0 flex flex-col"
                     style={{
-                      // GPU-accelerated visibility switching (нативное ощущение)
-                      // transform + opacity быстрее чем visibility для GPU
+                      // GPU-accelerated visibility switching
                       transform: isActive ? "translateZ(0)" : "translateZ(0) scale(0.98)",
                       opacity: isActive ? 1 : 0,
-                      // Prevent pointer events on hidden tabs
                       pointerEvents: isActive ? "auto" : "none",
-                      // GPU layer hints
                       willChange: "transform, opacity",
-                      // Изолируем layout - изменения внутри не влияют на другие табы
                       contain: "layout style paint",
                     }}
                     aria-hidden={!isActive}

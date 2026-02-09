@@ -378,6 +378,31 @@ export const diffFilesCollapsedAtomFamily = atomFamily((chatId: string) =>
   ),
 )
 
+// Helpers for split view ratio management
+export function getDefaultRatios(n: number): number[] {
+  if (n <= 0) return []
+  return Array(n).fill(1 / n) as number[]
+}
+
+export function addPaneRatio(ratios: number[]): number[] {
+  const n = ratios.length + 1
+  const scale = (n - 1) / n
+  return [...ratios.map(r => r * scale), 1 / n]
+}
+
+export function removePaneRatio(ratios: number[], removeIdx: number): number[] {
+  if (removeIdx < 0 || removeIdx >= ratios.length) return getDefaultRatios(ratios.length)
+  const removed = ratios[removeIdx]!
+  const rest = ratios.filter((_, i) => i !== removeIdx)
+  if (rest.length === 0) return []
+  const sum = rest.reduce((a, b) => a + b, 0)
+  if (sum === 0) return getDefaultRatios(rest.length)
+  const result = rest.map(r => r + (r / sum) * removed)
+  // Normalize to prevent floating-point drift
+  const total = result.reduce((a, b) => a + b, 0)
+  return total > 0 ? result.map(r => r / total) : getDefaultRatios(rest.length)
+}
+
 // Sub-chats display mode - tabs (horizontal) or sidebar (vertical list)
 // Window-scoped so each window can have its own layout preference
 export const agentsSubChatsSidebarModeAtom = atomWithWindowStorage<

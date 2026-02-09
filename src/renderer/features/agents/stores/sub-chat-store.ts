@@ -4,6 +4,7 @@ import { useStreamingStatusStore } from "./streaming-status-store"
 import { agentChatStore } from "./agent-chat-store"
 import { getWindowId } from "../../../contexts/WindowContext"
 import { clearTaskSnapshotCache } from "../ui/agent-task-tools"
+import { getDefaultRatios, addPaneRatio, removePaneRatio } from "../atoms"
 
 export interface SubChatMeta {
   id: string
@@ -22,6 +23,8 @@ interface AgentSubChatStore {
   openSubChatIds: string[] // Open tabs (preserves order)
   pinnedSubChatIds: string[] // Pinned sub-chats
   allSubChats: SubChatMeta[] // All sub-chats for history
+  splitPaneIds: string[] // Ordered IDs of panes in split group (empty = no split)
+  splitRatios: number[] // Per-pane width ratios summing to 1.0
 
   // Actions
   setChatId: (chatId: string | null) => void
@@ -35,15 +38,20 @@ interface AgentSubChatStore {
   updateSubChatName: (subChatId: string, name: string) => void
   updateSubChatMode: (subChatId: string, mode: "plan" | "agent") => void
   updateSubChatTimestamp: (subChatId: string) => void
+  addToSplit: (subChatId: string) => void
+  removeFromSplit: (subChatId: string) => void
+  closeSplit: () => void
+  setSplitRatios: (ratios: number[]) => void
+  initSplitFromWindow: (paneIds: string[]) => void
   reset: () => void
 }
 
 // localStorage helpers - store open tabs, active tab, and pinned tabs
 // Prefixed with windowId to isolate state per Electron window
-const getStorageKey = (chatId: string, type: "open" | "active" | "pinned") =>
+const getStorageKey = (chatId: string, type: "open" | "active" | "pinned" | "split" | "splitOrigin" | "splitPanes" | "splitRatios") =>
   `${getWindowId()}:agent-${type}-sub-chats-${chatId}`
 
-const getLegacyStorageKey = (chatId: string, type: "open" | "active" | "pinned") =>
+const getLegacyStorageKey = (chatId: string, type: "open" | "active" | "pinned" | "split" | "splitOrigin" | "splitPanes" | "splitRatios") =>
   `agent-${type}-sub-chats-${chatId}`
 
 // Custom event for notifying other components when open sub-chats change
@@ -52,7 +60,7 @@ export const OPEN_SUB_CHATS_CHANGE_EVENT = "open-sub-chats-change"
 // Debounce timer to avoid rapid-fire events
 let openSubChatsChangeTimer: ReturnType<typeof setTimeout> | null = null
 
-const saveToLS = (chatId: string, type: "open" | "active" | "pinned", value: unknown) => {
+const saveToLS = (chatId: string, type: "open" | "active" | "pinned" | "split" | "splitOrigin" | "splitPanes" | "splitRatios", value: unknown) => {
   if (typeof window === "undefined") return
   localStorage.setItem(getStorageKey(chatId, type), JSON.stringify(value))
   // Dispatch debounced event when open sub-chats change so sidebar can update
@@ -87,7 +95,7 @@ const findNumericWindowIdValue = (legacyKey: string, targetKey: string): string 
   return null
 }
 
-const loadFromLS = <T>(chatId: string, type: "open" | "active" | "pinned", fallback: T): T => {
+const loadFromLS = <T>(chatId: string, type: "open" | "active" | "pinned" | "split" | "splitOrigin" | "splitPanes" | "splitRatios", fallback: T): T => {
   if (typeof window === "undefined") return fallback
   try {
     const key = getStorageKey(chatId, type)
@@ -127,6 +135,8 @@ export const useAgentSubChatStore = create<AgentSubChatStore>((set, get) => ({
   openSubChatIds: [],
   pinnedSubChatIds: [],
   allSubChats: [],
+  splitPaneIds: [],
+  splitRatios: [],
 
   setChatId: (chatId) => {
     if (!chatId) {
@@ -136,6 +146,8 @@ export const useAgentSubChatStore = create<AgentSubChatStore>((set, get) => ({
         openSubChatIds: [],
         pinnedSubChatIds: [],
         allSubChats: [],
+        splitPaneIds: [],
+        splitRatios: [],
       })
       return
     }
@@ -146,11 +158,34 @@ export const useAgentSubChatStore = create<AgentSubChatStore>((set, get) => ({
     const activeSubChatId = loadFromLS<string | null>(chatId, "active", null)
     const pinnedSubChatIds = loadFromLS<string[]>(chatId, "pinned", [])
 
-    set({ chatId, openSubChatIds, activeSubChatId, pinnedSubChatIds, allSubChats: [] })
+    // Load split panes — migrate from old splitSubChatId/splitOriginId if needed
+    let splitPaneIds = loadFromLS<string[]>(chatId, "splitPanes", [])
+    if (splitPaneIds.length === 0) {
+      const oldSplit = loadFromLS<string | null>(chatId, "split", null)
+      const oldOrigin = loadFromLS<string | null>(chatId, "splitOrigin", null)
+      if (oldSplit && oldOrigin) {
+        splitPaneIds = [oldOrigin, oldSplit]
+        saveToLS(chatId, "splitPanes", splitPaneIds)
+      }
+    }
+
+    // Validate splitPaneIds against openSubChatIds
+    splitPaneIds = splitPaneIds.filter(id => openSubChatIds.includes(id))
+    if (splitPaneIds.length < 2) splitPaneIds = []
+
+    // Load per-chat ratios, reset if length doesn't match pane count
+    let splitRatios = loadFromLS<number[]>(chatId, "splitRatios", [])
+    if (splitRatios.length !== splitPaneIds.length) {
+      splitRatios = getDefaultRatios(splitPaneIds.length)
+    }
+
+    set({ chatId, openSubChatIds, activeSubChatId, pinnedSubChatIds, splitPaneIds, splitRatios, allSubChats: [] })
   },
 
   setActiveSubChat: (subChatId) => {
     const { chatId } = get()
+    // Split group is independent — navigating tabs never touches it.
+    // Split view shows automatically when active tab is part of the group.
     set({ activeSubChatId: subChatId })
     if (chatId) saveToLS(chatId, "active", subChatId)
   },
@@ -170,7 +205,7 @@ export const useAgentSubChatStore = create<AgentSubChatStore>((set, get) => ({
   },
 
   removeFromOpenSubChats: (subChatId) => {
-    const { openSubChatIds, activeSubChatId, chatId } = get()
+    const { openSubChatIds, activeSubChatId, chatId, splitPaneIds, splitRatios } = get()
     const newIds = openSubChatIds.filter((id) => id !== subChatId)
 
     // If closing active tab, switch to last remaining tab
@@ -179,10 +214,24 @@ export const useAgentSubChatStore = create<AgentSubChatStore>((set, get) => ({
       newActive = newIds[newIds.length - 1] || null
     }
 
-    set({ openSubChatIds: newIds, activeSubChatId: newActive })
+    // If closing a tab in the split group, remove it and update ratios
+    let newSplitPaneIds = splitPaneIds
+    let newRatios = splitRatios
+    if (splitPaneIds.includes(subChatId)) {
+      const removeIdx = splitPaneIds.indexOf(subChatId)
+      newSplitPaneIds = splitPaneIds.filter((id) => id !== subChatId)
+      newRatios = removePaneRatio(splitRatios, removeIdx)
+      if (newSplitPaneIds.length < 2) { newSplitPaneIds = []; newRatios = [] }
+    }
+
+    set({ openSubChatIds: newIds, activeSubChatId: newActive, splitPaneIds: newSplitPaneIds, splitRatios: newRatios })
     if (chatId) {
       saveToLS(chatId, "open", newIds)
       saveToLS(chatId, "active", newActive)
+      if (newSplitPaneIds !== splitPaneIds) {
+        saveToLS(chatId, "splitPanes", newSplitPaneIds)
+        saveToLS(chatId, "splitRatios", newRatios)
+      }
     }
 
     // Cleanup queue, streaming status, Chat instance, and task snapshot cache
@@ -198,7 +247,7 @@ export const useAgentSubChatStore = create<AgentSubChatStore>((set, get) => ({
     const newPinnedIds = pinnedSubChatIds.includes(subChatId)
       ? pinnedSubChatIds.filter((id) => id !== subChatId)
       : [...pinnedSubChatIds, subChatId]
-    
+
     set({ pinnedSubChatIds: newPinnedIds })
     if (chatId) saveToLS(chatId, "pinned", newPinnedIds)
   },
@@ -250,6 +299,93 @@ export const useAgentSubChatStore = create<AgentSubChatStore>((set, get) => ({
     })
   },
 
+  addToSplit: (subChatId) => {
+    const { chatId, activeSubChatId, splitPaneIds, splitRatios, openSubChatIds } = get()
+    if (subChatId === activeSubChatId) return
+    if (splitPaneIds.includes(subChatId)) return
+
+    let newPaneIds: string[]
+    let newRatios: number[]
+    if (splitPaneIds.length === 0) {
+      // Start new split group: [active, new]
+      if (!activeSubChatId) return
+      newPaneIds = [activeSubChatId, subChatId]
+      newRatios = getDefaultRatios(2)
+    } else if (splitPaneIds.length < 6) {
+      newPaneIds = [...splitPaneIds, subChatId]
+      newRatios = addPaneRatio(splitRatios.length === splitPaneIds.length ? splitRatios : getDefaultRatios(splitPaneIds.length))
+    } else {
+      return // Max 6 panes
+    }
+
+    // Ensure the new pane is in open tabs
+    let newOpenIds = openSubChatIds
+    if (!openSubChatIds.includes(subChatId)) {
+      newOpenIds = [...openSubChatIds, subChatId]
+    }
+
+    set({ splitPaneIds: newPaneIds, splitRatios: newRatios, openSubChatIds: newOpenIds })
+    if (chatId) {
+      saveToLS(chatId, "splitPanes", newPaneIds)
+      saveToLS(chatId, "splitRatios", newRatios)
+      if (newOpenIds !== openSubChatIds) saveToLS(chatId, "open", newOpenIds)
+    }
+  },
+
+  removeFromSplit: (subChatId) => {
+    const { chatId, splitPaneIds, splitRatios } = get()
+    if (!splitPaneIds.includes(subChatId)) return
+
+    const removeIdx = splitPaneIds.indexOf(subChatId)
+    let newPaneIds = splitPaneIds.filter((id) => id !== subChatId)
+    let newRatios = removePaneRatio(splitRatios, removeIdx)
+    if (newPaneIds.length < 2) { newPaneIds = []; newRatios = [] }
+
+    set({ splitPaneIds: newPaneIds, splitRatios: newRatios })
+    if (chatId) {
+      saveToLS(chatId, "splitPanes", newPaneIds)
+      saveToLS(chatId, "splitRatios", newRatios)
+    }
+  },
+
+  closeSplit: () => {
+    const { chatId } = get()
+    set({ splitPaneIds: [], splitRatios: [] })
+    if (chatId) {
+      saveToLS(chatId, "splitPanes", [])
+      saveToLS(chatId, "splitRatios", [])
+    }
+  },
+
+  setSplitRatios: (ratios) => {
+    const { chatId } = get()
+    set({ splitRatios: ratios })
+    if (chatId) saveToLS(chatId, "splitRatios", ratios)
+  },
+
+  initSplitFromWindow: (paneIds) => {
+    if (paneIds.length < 2) return
+    const { chatId, openSubChatIds } = get()
+    // Add all pane IDs to open tabs
+    const newOpenIds = [...openSubChatIds]
+    for (const id of paneIds) {
+      if (!newOpenIds.includes(id)) newOpenIds.push(id)
+    }
+    const ratios = getDefaultRatios(paneIds.length)
+    set({
+      openSubChatIds: newOpenIds,
+      activeSubChatId: paneIds[0],
+      splitPaneIds: paneIds,
+      splitRatios: ratios,
+    })
+    if (chatId) {
+      saveToLS(chatId, "open", newOpenIds)
+      saveToLS(chatId, "active", paneIds[0])
+      saveToLS(chatId, "splitPanes", paneIds)
+      saveToLS(chatId, "splitRatios", ratios)
+    }
+  },
+
   reset: () => {
     set({
       chatId: null,
@@ -257,6 +393,8 @@ export const useAgentSubChatStore = create<AgentSubChatStore>((set, get) => ({
       openSubChatIds: [],
       pinnedSubChatIds: [],
       allSubChats: [],
+      splitPaneIds: [],
+      splitRatios: [],
     })
   },
 }))

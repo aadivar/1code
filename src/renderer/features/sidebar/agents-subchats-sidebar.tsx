@@ -201,7 +201,7 @@ export function AgentsSubChatsSidebar({
   agentName,
 }: AgentsSubChatsSidebarProps) {
   // Use shallow comparison to prevent re-renders when arrays have same content
-  const { activeSubChatId, openSubChatIds, pinnedSubChatIds, allSubChats, parentChatId, togglePinSubChat } = useAgentSubChatStore(
+  const { activeSubChatId, openSubChatIds, pinnedSubChatIds, allSubChats, parentChatId, togglePinSubChat, splitPaneIds, addToSplit, removeFromSplit, closeSplit } = useAgentSubChatStore(
     useShallow((state) => ({
       activeSubChatId: state.activeSubChatId,
       openSubChatIds: state.openSubChatIds,
@@ -209,6 +209,10 @@ export function AgentsSubChatsSidebar({
       allSubChats: state.allSubChats,
       parentChatId: state.chatId,
       togglePinSubChat: state.togglePinSubChat,
+      splitPaneIds: state.splitPaneIds,
+      addToSplit: state.addToSplit,
+      removeFromSplit: state.removeFromSplit,
+      closeSplit: state.closeSplit,
     }))
   )
   const [loadingSubChats] = useAtom(loadingSubChatsAtom)
@@ -347,8 +351,36 @@ export function AgentsSubChatsSidebar({
       (chat) => !pinnedSubChatIds.includes(chat.id),
     )
 
+    // Ensure split pane tabs are in same section, adjacent, in splitPaneIds order
+    if (splitPaneIds.length >= 2) {
+      const splitPaneIdSet = new Set(splitPaneIds)
+      // Determine which section has the first split pane
+      const firstPaneInPinned = pinned.some(c => splitPaneIdSet.has(c.id))
+      const targetList = firstPaneInPinned ? pinned : unpinned
+      const otherList = firstPaneInPinned ? unpinned : pinned
+
+      // Move any split panes from the other section into target
+      const toMove = otherList.filter(c => splitPaneIdSet.has(c.id))
+      for (const chat of toMove) {
+        const idx = otherList.indexOf(chat)
+        if (idx >= 0) otherList.splice(idx, 1)
+      }
+
+      // Extract all split panes from target, re-insert contiguously
+      const splitChats = targetList.filter(c => splitPaneIdSet.has(c.id))
+      const nonSplitChats = targetList.filter(c => !splitPaneIdSet.has(c.id))
+      // Sort by splitPaneIds order
+      const allSplitChats = [...splitChats, ...toMove].sort(
+        (a, b) => splitPaneIds.indexOf(a.id) - splitPaneIds.indexOf(b.id)
+      )
+      const firstSplitIdx = targetList.findIndex(c => splitPaneIdSet.has(c.id))
+      const insertAt = Math.min(Math.max(firstSplitIdx, 0), nonSplitChats.length)
+      targetList.length = 0
+      targetList.push(...nonSplitChats.slice(0, insertAt), ...allSplitChats, ...nonSplitChats.slice(insertAt))
+    }
+
     return { pinnedChats: pinned, unpinnedChats: unpinned }
-  }, [searchQuery, openSubChats, pinnedSubChatIds])
+  }, [searchQuery, openSubChats, pinnedSubChatIds, splitPaneIds])
 
   const filteredSubChats = useMemo(() => {
     return [...pinnedChats, ...unpinnedChats]
@@ -457,6 +489,7 @@ export function AgentsSubChatsSidebar({
 
   const handleSubChatClick = (subChatId: string) => {
     const store = useAgentSubChatStore.getState()
+
     store.setActiveSubChat(subChatId)
 
     // Clear unseen indicator for this sub-chat
@@ -1211,12 +1244,17 @@ export function AgentsSubChatsSidebar({
                         </h3>
                       </div>
                       <div className="list-none p-0 m-0 mb-3">
-                        {pinnedChats.map((subChat, index) => {
+                        {(() => {
+                          const splitPaneIdSet = new Set(splitPaneIds)
+                          const isSplitActive = splitPaneIds.length >= 2
+                          const isSplitVisible = isSplitActive && splitPaneIds.includes(activeSubChatId ?? "")
+                          const sidebarItems = pinnedChats.map((subChat, index) => {
                           const isSubChatLoading = loadingChatIds.has(
                             subChat.id,
                           )
                           const isActive = activeSubChatId === subChat.id
                           const isPinned = pinnedSubChatIds.includes(subChat.id)
+                          const isInSplitGroup = splitPaneIdSet.has(subChat.id)
                           const globalIndex = filteredSubChats.findIndex(
                             (c) => c.id === subChat.id,
                           )
@@ -1245,7 +1283,7 @@ export function AgentsSubChatsSidebar({
                                 )
                               : null
 
-                          return (
+                          return { id: subChat.id, element: (
                             <ContextMenu key={subChat.id}>
                               <ContextMenuTrigger asChild>
                                 <div
@@ -1296,14 +1334,18 @@ export function AgentsSubChatsSidebar({
                                     "w-full text-left py-1.5 transition-colors duration-75 cursor-pointer group relative",
                                     "outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70",
                                     isMultiSelectMode ? "px-3" : "pl-2 pr-2",
-                                    isMultiSelectMode ? "" : "rounded-md",
-                                    isActive
+                                    (isMultiSelectMode || (isInSplitGroup && isSplitVisible)) ? "" : "rounded-md",
+                                    isInSplitGroup && isSplitVisible
                                       ? "bg-foreground/5 text-foreground"
-                                      : isChecked
+                                      : isActive
                                         ? "bg-foreground/5 text-foreground"
-                                        : isFocused
+                                        : isChecked
                                           ? "bg-foreground/5 text-foreground"
-                                          : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+                                          : isFocused
+                                            ? "bg-foreground/5 text-foreground"
+                                            : isInSplitGroup
+                                              ? "text-muted-foreground hover:bg-foreground/5 hover:text-foreground group-hover/split:bg-foreground/5 group-hover/split:text-foreground"
+                                              : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
                                   )}
                                 >
                                   <div className="flex items-start gap-2.5">
@@ -1474,11 +1516,41 @@ export function AgentsSubChatsSidebar({
                                   currentIndex={globalIndex}
                                   totalCount={filteredSubChats.length}
                                   chatId={parentChatId}
+                                  onOpenInSplit={addToSplit}
+                                  onCloseSplit={closeSplit}
+                                  onRemoveFromSplit={removeFromSplit}
+                                  splitPaneCount={splitPaneIds.length}
+                                  splitPaneIds={splitPaneIds}
+                                  isActiveTab={subChat.id === activeSubChatId}
+                                  isSplitTab={isInSplitGroup}
                                 />
                               )}
                             </ContextMenu>
-                          )
-                        })}
+                          ) }
+                        })
+
+                        if (!isSplitActive) return sidebarItems.map(t => t.element)
+                        const groupedItems: React.ReactNode[] = []
+                        let i = 0
+                        while (i < sidebarItems.length) {
+                          if (splitPaneIdSet.has(sidebarItems[i]!.id)) {
+                            const groupItems: typeof sidebarItems = []
+                            while (i < sidebarItems.length && splitPaneIdSet.has(sidebarItems[i]!.id)) {
+                              groupItems.push(sidebarItems[i]!)
+                              i++
+                            }
+                            groupedItems.push(
+                              <div key="split-group" className={cn("group/split rounded-md ring-1 overflow-hidden", isSplitVisible ? "ring-primary/20" : "ring-border/50")}>
+                                {groupItems.map(t => t.element)}
+                              </div>
+                            )
+                          } else {
+                            groupedItems.push(sidebarItems[i]!.element)
+                            i++
+                          }
+                        }
+                        return groupedItems
+                      })()}
                       </div>
                     </>
                   )}
@@ -1497,12 +1569,17 @@ export function AgentsSubChatsSidebar({
                         </h3>
                       </div>
                       <div className="list-none p-0 m-0">
-                        {unpinnedChats.map((subChat, index) => {
+                        {(() => {
+                          const splitPaneIdSet = new Set(splitPaneIds)
+                          const isSplitActive = splitPaneIds.length >= 2
+                          const isSplitVisible = isSplitActive && splitPaneIds.includes(activeSubChatId ?? "")
+                          const sidebarItems = unpinnedChats.map((subChat, index) => {
                           const isSubChatLoading = loadingChatIds.has(
                             subChat.id,
                           )
                           const isActive = activeSubChatId === subChat.id
                           const isPinned = pinnedSubChatIds.includes(subChat.id)
+                          const isInSplitGroup = splitPaneIdSet.has(subChat.id)
                           const globalIndex = filteredSubChats.findIndex(
                             (c) => c.id === subChat.id,
                           )
@@ -1531,7 +1608,7 @@ export function AgentsSubChatsSidebar({
                                 )
                               : null
 
-                          return (
+                          return { id: subChat.id, element: (
                             <ContextMenu key={subChat.id}>
                               <ContextMenuTrigger asChild>
                                 <div
@@ -1582,14 +1659,18 @@ export function AgentsSubChatsSidebar({
                                     "w-full text-left py-1.5 transition-colors duration-75 cursor-pointer group relative",
                                     "outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70",
                                     isMultiSelectMode ? "px-3" : "pl-2 pr-2",
-                                    isMultiSelectMode ? "" : "rounded-md",
-                                    isActive
+                                    (isMultiSelectMode || (isInSplitGroup && isSplitVisible)) ? "" : "rounded-md",
+                                    isInSplitGroup && isSplitVisible
                                       ? "bg-foreground/5 text-foreground"
-                                      : isChecked
+                                      : isActive
                                         ? "bg-foreground/5 text-foreground"
-                                        : isFocused
+                                        : isChecked
                                           ? "bg-foreground/5 text-foreground"
-                                          : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+                                          : isFocused
+                                            ? "bg-foreground/5 text-foreground"
+                                            : isInSplitGroup
+                                              ? "text-muted-foreground hover:bg-foreground/5 hover:text-foreground group-hover/split:bg-foreground/5 group-hover/split:text-foreground"
+                                              : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
                                   )}
                                 >
                                   <div className="flex items-start gap-2.5">
@@ -1760,11 +1841,41 @@ export function AgentsSubChatsSidebar({
                                   currentIndex={globalIndex}
                                   totalCount={filteredSubChats.length}
                                   chatId={parentChatId}
+                                  onOpenInSplit={addToSplit}
+                                  onCloseSplit={closeSplit}
+                                  onRemoveFromSplit={removeFromSplit}
+                                  splitPaneCount={splitPaneIds.length}
+                                  splitPaneIds={splitPaneIds}
+                                  isActiveTab={subChat.id === activeSubChatId}
+                                  isSplitTab={isInSplitGroup}
                                 />
                               )}
                             </ContextMenu>
-                          )
-                        })}
+                          ) }
+                        })
+
+                        if (!isSplitActive) return sidebarItems.map(t => t.element)
+                        const groupedItems: React.ReactNode[] = []
+                        let i = 0
+                        while (i < sidebarItems.length) {
+                          if (splitPaneIdSet.has(sidebarItems[i]!.id)) {
+                            const groupItems: typeof sidebarItems = []
+                            while (i < sidebarItems.length && splitPaneIdSet.has(sidebarItems[i]!.id)) {
+                              groupItems.push(sidebarItems[i]!)
+                              i++
+                            }
+                            groupedItems.push(
+                              <div key="split-group" className={cn("group/split rounded-md ring-1 overflow-hidden", isSplitVisible ? "ring-primary/20" : "ring-border/50")}>
+                                {groupItems.map(t => t.element)}
+                              </div>
+                            )
+                          } else {
+                            groupedItems.push(sidebarItems[i]!.element)
+                            i++
+                          }
+                        }
+                        return groupedItems
+                      })()}
                       </div>
                     </>
                   )}

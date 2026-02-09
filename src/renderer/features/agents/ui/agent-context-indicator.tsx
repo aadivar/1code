@@ -101,10 +101,10 @@ export const AgentContextIndicator = memo(function AgentContextIndicator({
   isCompacting,
   disabled,
 }: AgentContextIndicatorProps) {
-  const totalTokens = tokenData.totalInputTokens + tokenData.totalOutputTokens
+  const contextTokens = tokenData.totalInputTokens
   const contextWindow = CONTEXT_WINDOWS[modelId]
-  const percentUsed = Math.min(100, (totalTokens / contextWindow) * 100)
-  const isEmpty = totalTokens === 0
+  const percentUsed = Math.min(100, (contextTokens / contextWindow) * 100)
+  const isEmpty = contextTokens === 0
 
   const isClickable = onCompact && !disabled && !isCompacting
 
@@ -143,7 +143,7 @@ export const AgentContextIndicator = memo(function AgentContextIndicator({
               </span>
               <span className="text-muted-foreground mx-1">·</span>
               <span className="text-muted-foreground">
-                {formatTokens(totalTokens)} /{" "}
+                {formatTokens(contextTokens)} /{" "}
                 {formatTokens(contextWindow)} context
               </span>
             </>
