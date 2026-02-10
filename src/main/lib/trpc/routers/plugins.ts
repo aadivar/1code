@@ -2,6 +2,7 @@ import { router, publicProcedure } from "../index"
 import * as fs from "fs/promises"
 import * as path from "path"
 import matter from "gray-matter"
+import { resolveDirentType } from "../../fs/dirent"
 import {
   discoverInstalledPlugins,
   getPluginComponentPaths,
@@ -60,12 +61,13 @@ async function scanPluginCommands(dir: string): Promise<PluginComponent[]> {
       if (!isValidEntryName(entry.name)) continue
 
       const fullPath = path.join(dir, entry.name)
+      const { isDirectory, isFile } = await resolveDirentType(dir, entry)
 
-      if (entry.isDirectory()) {
+      if (isDirectory) {
         // Recursively scan nested directories for namespaced commands
         const nested = await scanPluginCommands(fullPath)
         components.push(...nested)
-      } else if (entry.isFile() && entry.name.endsWith(".md")) {
+      } else if (isFile && entry.name.endsWith(".md")) {
         try {
           const content = await fs.readFile(fullPath, "utf-8")
           const { data } = matter(content)
@@ -103,7 +105,10 @@ async function scanPluginSkills(dir: string): Promise<PluginComponent[]> {
     const entries = await fs.readdir(dir, { withFileTypes: true })
 
     for (const entry of entries) {
-      if (!entry.isDirectory() || !isValidEntryName(entry.name)) continue
+      if (!isValidEntryName(entry.name)) continue
+
+      const { isDirectory } = await resolveDirentType(dir, entry)
+      if (!isDirectory) continue
 
       const skillMdPath = path.join(dir, entry.name, "SKILL.md")
       try {
@@ -141,8 +146,10 @@ async function scanPluginAgents(dir: string): Promise<PluginComponent[]> {
     const entries = await fs.readdir(dir, { withFileTypes: true })
 
     for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith(".md") || !isValidEntryName(entry.name))
-        continue
+      if (!entry.name.endsWith(".md") || !isValidEntryName(entry.name)) continue
+
+      const { isFile } = await resolveDirentType(dir, entry)
+      if (!isFile) continue
 
       const fullPath = path.join(dir, entry.name)
       try {

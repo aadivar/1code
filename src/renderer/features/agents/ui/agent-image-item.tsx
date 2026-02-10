@@ -5,11 +5,6 @@ import { createPortal } from "react-dom"
 import { X, ImageOff, ChevronLeft, ChevronRight, Copy, Download } from "lucide-react"
 import { IconSpinner } from "../../../components/ui/icons"
 import {
-  HoverCard,
-  HoverCardTrigger,
-  HoverCardContent,
-} from "../../../components/ui/hover-card"
-import {
   ContextMenu,
   ContextMenuTrigger,
   ContextMenuContent,
@@ -176,40 +171,28 @@ export function AgentImageItem({
   return (
     <>
       <div
-        className="relative"
+        className="relative size-[44px] border border-border/50 rounded-lg p-0.5"
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
       >
         {isLoading ? (
-          <div className="size-8 flex items-center justify-center bg-muted rounded">
+          <div className="w-full h-full flex items-center justify-center bg-muted rounded">
             <IconSpinner className="size-4 text-muted-foreground" />
           </div>
         ) : hasError ? (
-          <div className="size-8 flex items-center justify-center bg-muted/50 rounded border border-destructive/20" title="Failed to load image">
+          <div className="w-full h-full flex items-center justify-center bg-muted/50 rounded border border-destructive/20" title="Failed to load image">
             <ImageOff className="size-4 text-destructive/50" />
           </div>
         ) : url ? (
-          <HoverCard openDelay={200}>
-            <HoverCardTrigger asChild>
-              <img
-                src={url}
-                alt={filename}
-                className="size-8 object-cover rounded cursor-pointer"
-                onClick={openFullscreen}
-                onError={handleImageError}
-              />
-            </HoverCardTrigger>
-            <HoverCardContent className="w-auto max-w-72 p-0" side="top">
-              <img
-                src={url}
-                alt={filename}
-                className="max-w-72 max-h-72 w-auto h-auto object-contain rounded-[10px]"
-                onError={handleImageError}
-              />
-            </HoverCardContent>
-          </HoverCard>
+          <img
+            src={url}
+            alt={filename}
+            className="w-full h-full object-cover rounded cursor-pointer"
+            onClick={openFullscreen}
+            onError={handleImageError}
+          />
         ) : (
-          <div className="size-8 bg-muted rounded flex items-center justify-center">
+          <div className="w-full h-full bg-muted rounded flex items-center justify-center">
             <IconSpinner className="size-4 text-muted-foreground" />
           </div>
         )}

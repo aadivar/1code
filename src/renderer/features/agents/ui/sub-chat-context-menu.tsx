@@ -92,6 +92,7 @@ export function SubChatContextMenu({
   splitPaneIds,
 }: SubChatContextMenuProps) {
   const closeTabShortcut = useCloseTabShortcut()
+  const newAgentSplitHotkey = useResolvedHotkeyDisplay("new-agent-split")
 
   const handleExport = useCallback((format: ExportFormat) => {
     if (!chatId) return
@@ -159,8 +160,10 @@ export function SubChatContextMenu({
         <ContextMenuItem
           onClick={() => onOpenInSplit(subChat.id)}
           disabled={isActiveTab || isOnlyChat || splitPaneCount >= 6}
+          className="justify-between"
         >
           Add as Split
+          {newAgentSplitHotkey && <Kbd>{newAgentSplitHotkey}</Kbd>}
         </ContextMenuItem>
       ) : null}
       <ContextMenuSeparator />

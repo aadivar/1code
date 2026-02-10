@@ -3,6 +3,7 @@ import * as path from "path"
 import * as os from "os"
 import matter from "gray-matter"
 import { discoverInstalledPlugins, getPluginComponentPaths } from "../../plugins"
+import { resolveDirentType } from "../../fs/dirent"
 import { getEnabledPlugins } from "./claude-settings"
 
 // Valid model values for agents
@@ -208,7 +209,8 @@ export async function scanAgentsDirectory(
       }
 
       // Accept .md files (Claude Code native format)
-      if (entry.isFile() && entry.name.endsWith(".md")) {
+      const { isFile } = await resolveDirentType(dir, entry)
+      if (isFile && entry.name.endsWith(".md")) {
         const agentPath = path.join(dir, entry.name)
         try {
           const content = await fs.readFile(agentPath, "utf-8")

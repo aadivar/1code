@@ -1,40 +1,40 @@
 "use client"
 
-import { useAtomValue } from "jotai"
+import { useAtom, useAtomValue } from "jotai"
 import { ListTree } from "lucide-react"
-import { memo, useCallback, useContext, useMemo, useState } from "react"
+import { memo, useCallback, useMemo } from "react"
 
-import { CollapseIcon, ExpandIcon, PlanIcon } from "../../../components/ui/icons"
+import { CollapseIcon, ExpandIcon } from "../../../components/ui/icons"
 import { TextShimmer } from "../../../components/ui/text-shimmer"
 import { cn } from "../../../lib/utils"
-import { selectedProjectAtom, showMessageJsonAtom } from "../atoms"
-import { MessageJsonDisplay } from "../ui/message-json-display"
+import { assistantMessageStepsExpandedAtomFamily, selectedProjectAtom, showMessageJsonAtom } from "../atoms"
+import { useFileOpen } from "../mentions"
 import { AgentAskUserQuestionTool } from "../ui/agent-ask-user-question-tool"
 import { AgentBashTool } from "../ui/agent-bash-tool"
 import { AgentEditTool } from "../ui/agent-edit-tool"
 import { AgentExploringGroup } from "../ui/agent-exploring-group"
-import { AgentTaskToolsGroup } from "../ui/agent-task-tools"
-import { AgentPlanFileTool } from "../ui/agent-plan-file-tool"
-import { isPlanFile } from "../ui/agent-tool-utils"
 import {
   AgentMessageUsage,
   type AgentMessageMetadata,
 } from "../ui/agent-message-usage"
+import { AgentPlanFileTool } from "../ui/agent-plan-file-tool"
 import { AgentPlanTool } from "../ui/agent-plan-tool"
 import { AgentTaskTool } from "../ui/agent-task-tool"
+import { AgentTaskToolsGroup } from "../ui/agent-task-tools"
 import { AgentThinkingTool } from "../ui/agent-thinking-tool"
 import { AgentTodoTool } from "../ui/agent-todo-tool"
 import { AgentToolCall } from "../ui/agent-tool-call"
 import { AgentToolRegistry, getToolStatus } from "../ui/agent-tool-registry"
+import { isPlanFile } from "../ui/agent-tool-utils"
 import { AgentWebFetchTool } from "../ui/agent-web-fetch-tool"
 import { AgentWebSearchCollapsible } from "../ui/agent-web-search-collapsible"
+import { GitActivityBadges } from "../ui/git-activity-badges"
 import {
   CopyButton,
   PlayButton,
   getMessageTextContent,
 } from "../ui/message-action-buttons"
-import { useFileOpen } from "../mentions"
-import { GitActivityBadges } from "../ui/git-activity-badges"
+import { MessageJsonDisplay } from "../ui/message-json-display"
 import { MemoizedTextPart } from "./memoized-text-part"
 
 // Exploring tools - these get grouped when 3+ consecutive
@@ -111,23 +111,23 @@ function groupTaskTools(parts: any[], nestedToolIds: Set<string>): any[] {
 interface CollapsibleStepsProps {
   stepsCount: number
   children: React.ReactNode
-  defaultExpanded?: boolean
+  isExpanded: boolean
+  onToggle: () => void
 }
 
 function CollapsibleSteps({
   stepsCount,
   children,
-  defaultExpanded = false,
+  isExpanded,
+  onToggle,
 }: CollapsibleStepsProps) {
-  const [isExpanded, setIsExpanded] = useState(defaultExpanded)
-
   if (stepsCount === 0) return null
 
   return (
     <div className="mb-2" data-collapsible-steps="true">
       <div
         className="flex items-center justify-between rounded-md py-0.5 px-2 cursor-pointer hover:bg-muted/50 transition-colors"
-        onClick={() => setIsExpanded(!isExpanded)}
+        onClick={onToggle}
       >
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <ListTree className="w-3.5 h-3.5 flex-shrink-0" />
@@ -139,7 +139,7 @@ function CollapsibleSteps({
           className="p-1 rounded-md hover:bg-accent transition-[background-color,transform] duration-150 ease-out active:scale-95"
           onClick={(e) => {
             e.stopPropagation()
-            setIsExpanded(!isExpanded)
+            onToggle()
           }}
         >
           <div className="relative w-4 h-4">
@@ -434,6 +434,15 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
   )
 
   const msgMetadata = message?.metadata as AgentMessageMetadata
+  const stepsExpansionKey = `${subChatId}:${message.id}`
+  const [storedStepsExpanded, setStoredStepsExpanded] = useAtom(
+    assistantMessageStepsExpandedAtomFamily(stepsExpansionKey)
+  )
+  const isStepsExpanded = storedStepsExpanded ?? false
+  const toggleStepsExpanded = useCallback(
+    () => setStoredStepsExpanded(!isStepsExpanded),
+    [isStepsExpanded, setStoredStepsExpanded]
+  )
 
   const renderPart = useCallback((part: any, idx: number, isFinal = false) => {
     if (part.type === "step-start") return null
@@ -608,6 +617,40 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
     return null
   }, [nestedToolsMap, nestedToolIds, orphanToolCallIds, orphanFirstToolCallIds, orphanTaskGroups, collapseBeforeIndex, visibleStepsCount, status, isLastMessage, isStreaming, subChatId, message.id, planOpsSummary, shouldCollapse, lastCollapsedPlanOp])
 
+  const renderStepParts = useCallback(() => {
+    // Apply both grouping functions: first task tools, then exploring tools
+    const taskGrouped = groupTaskTools(stepParts, nestedToolIds)
+    const grouped = groupExploringTools(taskGrouped, nestedToolIds)
+    return grouped.map((part: any, idx: number) => {
+      if (part.type === "exploring-group") {
+        const isLast = idx === grouped.length - 1
+        const isGroupStreaming = isStreaming && isLastMessage && isLast
+        return (
+          <AgentExploringGroup
+            key={idx}
+            parts={part.parts}
+            chatStatus={status}
+            isStreaming={isGroupStreaming}
+          />
+        )
+      }
+      if (part.type === "task-group") {
+        const isLast = idx === grouped.length - 1
+        const isGroupStreaming = isStreaming && isLastMessage && isLast
+        return (
+          <AgentTaskToolsGroup
+            key={idx}
+            parts={part.parts}
+            chatStatus={status}
+            isStreaming={isGroupStreaming}
+            subChatId={subChatId}
+          />
+        )
+      }
+      return renderPart(part, idx, false)
+    })
+  }, [stepParts, nestedToolIds, isStreaming, isLastMessage, status, subChatId, renderPart])
+
   if (!message) return null
 
   return (
@@ -617,40 +660,12 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
     >
       <div className="flex flex-col gap-1.5">
         {shouldCollapse && visibleStepsCount > 0 && (
-          <CollapsibleSteps stepsCount={visibleStepsCount}>
-            {(() => {
-              // Apply both grouping functions: first task tools, then exploring tools
-              const taskGrouped = groupTaskTools(stepParts, nestedToolIds)
-              const grouped = groupExploringTools(taskGrouped, nestedToolIds)
-              return grouped.map((part: any, idx: number) => {
-                if (part.type === "exploring-group") {
-                  const isLast = idx === grouped.length - 1
-                  const isGroupStreaming = isStreaming && isLastMessage && isLast
-                  return (
-                    <AgentExploringGroup
-                      key={idx}
-                      parts={part.parts}
-                      chatStatus={status}
-                      isStreaming={isGroupStreaming}
-                    />
-                  )
-                }
-                if (part.type === "task-group") {
-                  const isLast = idx === grouped.length - 1
-                  const isGroupStreaming = isStreaming && isLastMessage && isLast
-                  return (
-                    <AgentTaskToolsGroup
-                      key={idx}
-                      parts={part.parts}
-                      chatStatus={status}
-                      isStreaming={isGroupStreaming}
-                      subChatId={subChatId}
-                    />
-                  )
-                }
-                return renderPart(part, idx, false)
-              })
-            })()}
+          <CollapsibleSteps
+            stepsCount={visibleStepsCount}
+            isExpanded={isStepsExpanded}
+            onToggle={toggleStepsExpanded}
+          >
+            {isStepsExpanded ? renderStepParts() : null}
           </CollapsibleSteps>
         )}
 

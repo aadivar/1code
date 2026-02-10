@@ -1,15 +1,15 @@
 "use client"
 
-import { memo, useMemo } from "react"
+import { memo, useCallback, useMemo } from "react"
 import { useAtomValue } from "jotai"
 import {
   messageAtomFamily,
   assistantIdsPerChatAtomFamily,
   isLastUserMessagePerChatAtomFamily,
   rollbackTargetPerChatAtomFamily,
-  isStreamingAtom,
   isRollingBackAtom,
 } from "../stores/message-store"
+import { useStreamingStatusStore } from "../stores/streaming-status-store"
 import { MemoizedAssistantMessages } from "./messages-list"
 import { extractTextMentions, TextMentionBlocks, TextMentionBlock } from "../mentions/render-file-mentions"
 import { AgentImageItem } from "../ui/agent-image-item"
@@ -104,7 +104,10 @@ export const IsolatedMessageGroup = memo(function IsolatedMessageGroup({
   const assistantIds = useAtomValue(assistantIdsPerChatAtomFamily(perChatKey))
   const isLastGroup = useAtomValue(isLastUserMessagePerChatAtomFamily(perChatKey))
   const rollbackTargetSdkUuid = useAtomValue(rollbackTargetPerChatAtomFamily(perChatKey))
-  const isStreaming = useAtomValue(isStreamingAtom)
+  const subChatStatus = useStreamingStatusStore(
+    useCallback((s) => s.statuses[subChatId] ?? "ready", [subChatId])
+  )
+  const isStreaming = subChatStatus === "streaming" || subChatStatus === "submitted"
   const isRollingBack = useAtomValue(isRollingBackAtom)
 
   // Show rollback button only when this user turn has a valid rollback target.
@@ -148,7 +151,7 @@ export const IsolatedMessageGroup = memo(function IsolatedMessageGroup({
     <MessageGroupWrapper isLastGroup={isLastGroup}>
       {/* All attachments in one row - NOT sticky (only when there's also text) */}
       {((!isImageOnlyMessage && imageParts.length > 0) || textMentions.length > 0) && (
-        <div className="mb-2 pointer-events-auto flex flex-wrap items-end gap-1.5">
+        <div className="mb-2 pointer-events-auto flex flex-wrap items-center gap-1.5">
           {imageParts.length > 0 && !isImageOnlyMessage && (() => {
             const resolveImgUrl = (img: any) =>
               img.data?.base64Data && img.data?.mediaType

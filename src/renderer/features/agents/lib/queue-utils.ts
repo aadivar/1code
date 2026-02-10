@@ -4,6 +4,7 @@
  */
 
 import type { UploadedImage, UploadedFile } from "../hooks/use-agents-file-upload"
+import type { PastedTextFile } from "../hooks/use-pasted-text-files"
 
 export interface QueuedImage {
   id: string
@@ -55,6 +56,14 @@ export interface QueuedDiffTextContext {
   lineType?: "old" | "new"
 }
 
+export interface QueuedPastedText {
+  id: string
+  filePath: string
+  filename: string
+  size: number
+  preview: string
+}
+
 export type AgentQueueItem = {
   id: string
   message: string // Serialized value with @[id] tokens for mentions
@@ -62,6 +71,7 @@ export type AgentQueueItem = {
   files?: QueuedFile[]
   textContexts?: QueuedTextContext[]
   diffTextContexts?: QueuedDiffTextContext[]
+  pastedTexts?: QueuedPastedText[]
   timestamp: Date
   status: "pending" | "processing"
 }
@@ -76,7 +86,8 @@ export function createQueueItem(
   images?: QueuedImage[],
   files?: QueuedFile[],
   textContexts?: QueuedTextContext[],
-  diffTextContexts?: QueuedDiffTextContext[]
+  diffTextContexts?: QueuedDiffTextContext[],
+  pastedTexts?: QueuedPastedText[]
 ): AgentQueueItem {
   return {
     id,
@@ -85,6 +96,7 @@ export function createQueueItem(
     files: files && files.length > 0 ? files : undefined,
     textContexts: textContexts && textContexts.length > 0 ? textContexts : undefined,
     diffTextContexts: diffTextContexts && diffTextContexts.length > 0 ? diffTextContexts : undefined,
+    pastedTexts: pastedTexts && pastedTexts.length > 0 ? pastedTexts : undefined,
     timestamp: new Date(),
     status: "pending",
   }
@@ -152,6 +164,17 @@ export function toQueuedDiffTextContext(ctx: DiffTextContext): QueuedDiffTextCon
     filePath: ctx.filePath,
     lineNumber: ctx.lineNumber,
     lineType: ctx.lineType,
+  }
+}
+
+// Helper to convert PastedTextFile to QueuedPastedText
+export function toQueuedPastedText(pt: PastedTextFile): QueuedPastedText {
+  return {
+    id: pt.id,
+    filePath: pt.filePath,
+    filename: pt.filename,
+    size: pt.size,
+    preview: pt.preview,
   }
 }
 

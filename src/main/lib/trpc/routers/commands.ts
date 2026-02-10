@@ -5,6 +5,7 @@ import * as path from "path"
 import * as os from "os"
 import matter from "gray-matter"
 import { discoverInstalledPlugins, getPluginComponentPaths } from "../../plugins"
+import { resolveDirentType } from "../../fs/dirent"
 import { getEnabledPlugins } from "./claude-settings"
 
 export interface FileCommand {
@@ -76,8 +77,9 @@ async function scanCommandsDirectory(
       }
 
       const fullPath = path.join(dir, entry.name)
+      const { isDirectory, isFile } = await resolveDirentType(dir, entry)
 
-      if (entry.isDirectory()) {
+      if (isDirectory) {
         // Recursively scan nested directories
         const nestedCommands = await scanCommandsDirectory(
           fullPath,
@@ -85,7 +87,7 @@ async function scanCommandsDirectory(
           prefix ? `${prefix}:${entry.name}` : entry.name,
         )
         commands.push(...nestedCommands)
-      } else if (entry.isFile() && entry.name.endsWith(".md")) {
+      } else if (isFile && entry.name.endsWith(".md")) {
         const baseName = entry.name.replace(/\.md$/, "")
         const fallbackName = prefix ? `${prefix}:${baseName}` : baseName
 

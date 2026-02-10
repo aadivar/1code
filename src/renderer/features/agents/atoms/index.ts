@@ -378,6 +378,20 @@ export const diffFilesCollapsedAtomFamily = atomFamily((chatId: string) =>
   ),
 )
 
+// Collapsible steps expanded state per message (session-only)
+// Map<`${subChatId}:${messageId}`, isExpanded>
+const assistantMessageStepsExpandedStorageAtom = atom<Record<string, boolean | undefined>>({})
+
+export const assistantMessageStepsExpandedAtomFamily = atomFamily((key: string) =>
+  atom(
+    (get) => get(assistantMessageStepsExpandedStorageAtom)[key],
+    (get, set, isExpanded: boolean) => {
+      const current = get(assistantMessageStepsExpandedStorageAtom)
+      set(assistantMessageStepsExpandedStorageAtom, { ...current, [key]: isExpanded })
+    },
+  ),
+)
+
 // Helpers for split view ratio management
 export function getDefaultRatios(n: number): number[] {
   if (n <= 0) return []

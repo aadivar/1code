@@ -526,6 +526,9 @@ export const ChatInputArea = memo(function ChatInputArea({
     updateMode(getNextMode(subChatMode))
   }, [subChatMode, updateMode])
 
+  // Track narrow width for compact layout (hide labels when < 310px)
+  const [isNarrow, setIsNarrow] = useState(false)
+
   // Voice input state
   const {
     isRecording: isVoiceRecording,
@@ -1041,6 +1044,7 @@ export const ChatInputArea = memo(function ChatInputArea({
           el.style.setProperty("--chat-input-width", `${width}px`)
           parent?.style.setProperty("--chat-input-height", `${height}px`)
           parent?.style.setProperty("--chat-input-width", `${width}px`)
+          setIsNarrow(width < 310)
         })
         observer.observe(el)
       }}
@@ -1067,7 +1071,7 @@ export const ChatInputArea = memo(function ChatInputArea({
               onSubmit={onSend}
               contextItems={
                 images.length > 0 || files.length > 0 || textContexts.length > 0 || (diffTextContexts?.length ?? 0) > 0 || pastedTexts.length > 0 ? (
-                  <div className="flex flex-wrap gap-[6px]">
+                  <div className="flex flex-wrap items-center gap-[6px]">
                     {(() => {
                       // Build allImages array for gallery navigation
                       const allImages = images
@@ -1195,7 +1199,7 @@ export const ChatInputArea = memo(function ChatInputArea({
                         ) : (
                           <AgentIcon className="h-3.5 w-3.5 shrink-0" />
                         )}
-                        <span className="truncate">{subChatMode === "plan" ? "Plan" : "Agent"}</span>
+                        {!isNarrow && <span className="truncate">{subChatMode === "plan" ? "Plan" : "Agent"}</span>}
                         <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
                       </button>
                     </DropdownMenuTrigger>
@@ -1407,10 +1411,12 @@ export const ChatInputArea = memo(function ChatInputArea({
                               : "hover:text-foreground hover:bg-muted/50",
                           )}
                         >
-                          <ClaudeCodeIcon className="h-3.5 w-3.5 shrink-0" />
+                          {!isNarrow && <ClaudeCodeIcon className="h-3.5 w-3.5 shrink-0" />}
                           <span className="truncate">
                             {hasCustomClaudeConfig ? (
                               "Custom Model"
+                            ) : isNarrow ? (
+                              selectedModel?.name
                             ) : (
                               <>
                                 {selectedModel?.name}{" "}

@@ -100,6 +100,17 @@ export const isLastMessageAtomFamily = atomFamily((messageId: string) =>
   atom((get) => get(lastMessageIdAtom) === messageId)
 )
 
+// Per-subchat version: "subChatId:messageId" key
+export const isLastMessagePerChatAtomFamily = atomFamily((key: string) => {
+  const sepIdx = key.indexOf(":")
+  const subChatId = key.slice(0, sepIdx)
+  const messageId = key.slice(sepIdx + 1)
+  return atom((get) => {
+    const ids = get(messageIdsPerChatAtom(subChatId))
+    return ids.length > 0 && ids[ids.length - 1] === messageId
+  })
+})
+
 // Check if a specific message is currently streaming
 export const isMessageStreamingAtomFamily = atomFamily((messageId: string) =>
   atom((get) => {

@@ -92,6 +92,12 @@ export const ALL_SHORTCUT_ACTIONS: ShortcutAction[] = [
     defaultKeys: ["cmd", "T"],
   },
   {
+    id: "new-agent-split",
+    label: "New agent in split view",
+    category: "agents",
+    defaultKeys: ["cmd", "shift", "T"],
+  },
+  {
     id: "search-chats",
     label: "Search chats",
     category: "agents",

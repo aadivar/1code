@@ -190,7 +190,7 @@ export const AgentUserMessageBubble = memo(function AgentUserMessageBubble({
         <div className="space-y-2 w-full">
           {/* Show attached images from stored message */}
           {imageParts.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
               {(() => {
                 // Build allImages array for gallery navigation
                 const resolveImgUrl = (img: any) =>

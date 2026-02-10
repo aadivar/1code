@@ -1,10 +1,12 @@
 import { create } from "zustand"
-import { useMessageQueueStore } from "./message-queue-store"
-import { useStreamingStatusStore } from "./streaming-status-store"
-import { agentChatStore } from "./agent-chat-store"
 import { getWindowId } from "../../../contexts/WindowContext"
+import { appStore } from "../../../lib/jotai-store"
+import { addPaneRatio, getDefaultRatios, removePaneRatio } from "../atoms"
 import { clearTaskSnapshotCache } from "../ui/agent-task-tools"
-import { getDefaultRatios, addPaneRatio, removePaneRatio } from "../atoms"
+import { agentChatStore } from "./agent-chat-store"
+import { useMessageQueueStore } from "./message-queue-store"
+import { syncMessagesWithStatusAtom } from "./message-store"
+import { useStreamingStatusStore } from "./streaming-status-store"
 
 export interface SubChatMeta {
   id: string
@@ -188,6 +190,22 @@ export const useAgentSubChatStore = create<AgentSubChatStore>((set, get) => ({
     // Split view shows automatically when active tab is part of the group.
     set({ activeSubChatId: subChatId })
     if (chatId) saveToLS(chatId, "active", subChatId)
+
+    // Pre-sync global message atoms immediately on tab switch.
+    // This ensures currentSubChatIdAtom matches the new subChatId BEFORE
+    // React re-renders, so IsolatedMessagesSection's guard passes on first render.
+    const chat = agentChatStore.get(subChatId) as
+      | { messages?: any[]; status?: string }
+      | null
+      | undefined
+
+    if (chat) {
+      appStore.set(syncMessagesWithStatusAtom, {
+        messages: chat.messages ?? [],
+        status: chat.status ?? "ready",
+        subChatId,
+      })
+    }
   },
 
   setOpenSubChats: (subChatIds) => {

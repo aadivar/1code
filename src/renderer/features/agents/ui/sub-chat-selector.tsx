@@ -239,6 +239,7 @@ export function SubChatSelector({
   const toggleTerminalHotkey = useResolvedHotkeyDisplay("toggle-terminal")
   const archiveAgentHotkey = useResolvedHotkeyDisplay("archive-agent")
   const newAgentHotkey = useResolvedHotkeyDisplay("new-agent")
+  const newAgentSplitHotkey = useResolvedHotkeyDisplay("new-agent-split")
 
   // Pending plan approvals from DB - only for open sub-chats
   const { data: pendingPlanApprovalsData } = trpc.chats.getPendingPlanApprovals.useQuery(
@@ -476,7 +477,6 @@ export function SubChatSelector({
       window.removeEventListener("keydown", handleHistoryHotkey, true)
   }, [subChatsSidebarMode])
 
-  // Keyboard shortcut: Cmd+Shift+T / Ctrl+Shift+T for new sub-chat
   // Scroll to active tab when it changes
   useEffect(() => {
     if (!activeSubChatId || !tabsContainerRef.current) return
@@ -744,12 +744,12 @@ export function SubChatSelector({
                             ? "overflow-visible px-0"
                             : "overflow-hidden px-1.5 py-0.5 whitespace-nowrap min-w-[50px] gap-1.5",
                           isInSplitPair && isSplitVisible
-                            ? "bg-muted text-foreground max-w-[180px]"
+                            ? "bg-muted text-foreground w-[140px]"
                             : isActive
-                              ? "bg-muted text-foreground max-w-[180px]"
+                              ? "bg-muted text-foreground w-[140px]"
                               : isInSplitPair
-                                ? "hover:bg-muted/80 group-hover/split:bg-muted/60 max-w-[150px]"
-                                : "hover:bg-muted/80 max-w-[150px]",
+                                ? "hover:bg-muted/80 group-hover/split:bg-muted/60 w-[140px]"
+                                : "hover:bg-muted/80 w-[140px]",
                         )}
                       >
                         {/* Icon: question icon (priority) OR loading spinner OR mode icon with badge (hide when editing) */}
@@ -908,7 +908,7 @@ export function SubChatSelector({
                     i++
                   }
                   result.push(
-                    <div key="split-group" className={cn("group/split flex items-center gap-0.5 rounded-lg ring-1 flex-shrink-0 px-0.5", isSplitVisible ? "ring-primary/20" : "ring-border/50")}>
+                    <div key="split-group" className="group/split flex items-center gap-0.5 rounded-lg ring-1 ring-border flex-shrink-0 px-0.5 py-0.5">
                       {groupItems.map(t => t.element)}
                     </div>
                   )
@@ -939,8 +939,18 @@ export function SubChatSelector({
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">
-                  New chat
-                  {newAgentHotkey && <Kbd>{newAgentHotkey}</Kbd>}
+                  <div className="flex flex-col gap-0.5">
+                    <div className="flex items-center gap-1">
+                      <span>New chat</span>
+                      {newAgentHotkey && <Kbd>{newAgentHotkey}</Kbd>}
+                    </div>
+                    {newAgentSplitHotkey && (
+                      <div className="flex items-center gap-1">
+                        <span>New in split</span>
+                        <Kbd>{newAgentSplitHotkey}</Kbd>
+                      </div>
+                    )}
+                  </div>
                 </TooltipContent>
               </Tooltip>
             </div>

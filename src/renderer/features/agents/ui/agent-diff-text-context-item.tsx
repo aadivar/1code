@@ -53,12 +53,12 @@ export function AgentDiffTextContextItem({
 
   return (
     <div
-      className="relative flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-muted/50 cursor-default min-w-[120px] max-w-[200px]"
+      className="relative flex items-center gap-2 pl-1 pr-2 py-1 rounded-lg bg-muted/50 cursor-default min-w-[120px] max-w-[200px]"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
       {/* Icon container */}
-      <div className="flex items-center justify-center size-8 rounded-md bg-muted shrink-0">
+      <div className="flex items-center justify-center w-8 self-stretch rounded-md bg-muted shrink-0">
         {isPlan ? (
           <TextSelectIcon className="size-4 text-muted-foreground" />
         ) : (

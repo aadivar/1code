@@ -1423,7 +1423,7 @@ export function NewChatForm({
   // Context items for images, files, and pasted text files
   const contextItems =
     images.length > 0 || files.length > 0 || pastedTexts.length > 0 ? (
-      <div className="flex flex-wrap gap-[6px]">
+      <div className="flex flex-wrap items-center gap-[6px]">
         {(() => {
           // Build allImages array for gallery navigation
           const allImages = images

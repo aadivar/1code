@@ -48,18 +48,20 @@ export function AgentFileItem({
 
   return (
     <div
-      className="relative flex items-center gap-1.5 px-2 py-1 bg-muted/50 rounded border border-border/50 max-w-[200px]"
+      className="relative flex items-center gap-2 pl-1 pr-2 py-1 rounded-lg bg-muted/50 min-w-[120px] max-w-[200px]"
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
-      {isLoading ? (
-        <IconSpinner className="size-3.5 text-muted-foreground flex-shrink-0" />
-      ) : (
-        <Icon className="size-3.5 text-muted-foreground flex-shrink-0" />
-      )}
+      <div className="flex items-center justify-center w-8 self-stretch rounded-md bg-muted shrink-0">
+        {isLoading ? (
+          <IconSpinner className="size-4 text-muted-foreground" />
+        ) : (
+          <Icon className="size-4 text-muted-foreground" />
+        )}
+      </div>
 
       <div className="flex flex-col min-w-0">
-        <span className="text-xs text-foreground truncate" title={filename}>
+        <span className="text-sm font-medium text-foreground truncate" title={filename}>
           {filename}
         </span>
         {size !== undefined && (

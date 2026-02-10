@@ -16,6 +16,7 @@ export type ShortcutActionId =
   | "open-kanban"
   // Agents
   | "new-agent"
+  | "new-agent-split"
   | "search-chats"
   | "search-in-chat"
   | "archive-agent"

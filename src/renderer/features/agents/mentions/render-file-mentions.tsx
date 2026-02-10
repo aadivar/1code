@@ -550,55 +550,26 @@ export function TextMentionBlock({ mention }: { mention: ParsedMention }) {
         : "Code selection"
 
   return (
-    <HoverCard openDelay={300} closeDelay={100}>
-      <HoverCardTrigger asChild>
-        <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-muted/50 cursor-default min-w-[120px] max-w-[200px]">
-          {/* Icon container */}
-          <div className="flex items-center justify-center size-8 rounded-md bg-muted shrink-0">
-            {mention.type === "quote" || mention.type === "pasted" ? (
-              <TextSelectIcon className="size-4 text-muted-foreground" />
-            ) : (
-              <CodeSelectIcon className="size-4 text-muted-foreground" />
-            )}
-          </div>
+    <div className="flex items-center gap-2 pl-1 pr-2 py-1 rounded-lg bg-muted/50 cursor-default min-w-[120px] max-w-[200px]">
+      {/* Icon container */}
+      <div className="flex items-center justify-center w-8 self-stretch rounded-md bg-muted shrink-0">
+        {mention.type === "quote" || mention.type === "pasted" ? (
+          <TextSelectIcon className="size-4 text-muted-foreground" />
+        ) : (
+          <CodeSelectIcon className="size-4 text-muted-foreground" />
+        )}
+      </div>
 
-          {/* Text content */}
-          <div className="flex flex-col min-w-0">
-            <span className="text-sm font-medium text-foreground truncate">
-              {title}
-            </span>
-            <span className="text-xs text-muted-foreground">
-              {subtitle}
-            </span>
-          </div>
-        </div>
-      </HoverCardTrigger>
-      <HoverCardContent
-        side="top"
-        align="start"
-        className="w-80 max-h-48 overflow-y-auto"
-      >
-        <div className="flex flex-col gap-1">
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            {mention.type === "quote" || mention.type === "pasted" ? (
-              <TextSelectIcon className="size-3" />
-            ) : (
-              <CodeSelectIcon className="size-3" />
-            )}
-            <span>
-              {mention.type === "quote"
-                ? "Selected text"
-                : mention.type === "pasted"
-                  ? `Pasted text · ${formatSize(mention.size || 0)}`
-                  : `${mention.path}${mention.lineNumber ? `:${mention.lineNumber}` : ""}`}
-            </span>
-          </div>
-          <pre className="text-sm whitespace-pre-wrap break-words font-mono">
-            {mention.fullText || mention.label}
-          </pre>
-        </div>
-      </HoverCardContent>
-    </HoverCard>
+      {/* Text content */}
+      <div className="flex flex-col min-w-0">
+        <span className="text-sm font-medium text-foreground truncate">
+          {title}
+        </span>
+        <span className="text-xs text-muted-foreground">
+          {subtitle}
+        </span>
+      </div>
+    </div>
   )
 }
 
@@ -610,7 +581,7 @@ export function TextMentionBlocks({ mentions }: { mentions: ParsedMention[] }) {
   if (textMentions.length === 0) return null
 
   return (
-    <div className="flex flex-wrap gap-1.5">
+    <div className="flex flex-wrap items-center gap-1.5">
       {textMentions.map((mention, idx) => (
         <TextMentionBlock key={idx} mention={mention} />
       ))}

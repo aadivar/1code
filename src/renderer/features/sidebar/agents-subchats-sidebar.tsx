@@ -1540,7 +1540,7 @@ export function AgentsSubChatsSidebar({
                               i++
                             }
                             groupedItems.push(
-                              <div key="split-group" className={cn("group/split rounded-md ring-1 overflow-hidden", isSplitVisible ? "ring-primary/20" : "ring-border/50")}>
+                              <div key="split-group" className="group/split rounded-md ring-1 ring-border overflow-hidden">
                                 {groupItems.map(t => t.element)}
                               </div>
                             )
@@ -1865,7 +1865,7 @@ export function AgentsSubChatsSidebar({
                               i++
                             }
                             groupedItems.push(
-                              <div key="split-group" className={cn("group/split rounded-md ring-1 overflow-hidden", isSplitVisible ? "ring-primary/20" : "ring-border/50")}>
+                              <div key="split-group" className="group/split rounded-md ring-1 ring-border overflow-hidden">
                                 {groupItems.map(t => t.element)}
                               </div>
                             )

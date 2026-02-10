@@ -3,6 +3,7 @@ import type { Dirent } from "fs"
 import * as path from "path"
 import * as os from "os"
 import type { McpServerConfig } from "../claude-config"
+import { isDirentDirectory } from "../fs/dirent"
 
 export interface PluginInfo {
   name: string
@@ -79,7 +80,13 @@ export async function discoverInstalledPlugins(): Promise<PluginInfo[]> {
   }
 
   for (const marketplace of marketplaces) {
-    if (!marketplace.isDirectory() || marketplace.name.startsWith(".")) continue
+    if (marketplace.name.startsWith(".")) continue
+
+    const isMarketplaceDir = await isDirentDirectory(
+      marketplacesDir,
+      marketplace,
+    )
+    if (!isMarketplaceDir) continue
 
     const marketplacePath = path.join(marketplacesDir, marketplace.name)
     const marketplaceJsonPath = path.join(marketplacePath, ".claude-plugin", "marketplace.json")
@@ -108,7 +115,8 @@ export async function discoverInstalledPlugins(): Promise<PluginInfo[]> {
 
         const pluginPath = path.resolve(marketplacePath, sourcePath)
         try {
-          await fs.access(pluginPath)
+          const pluginStat = await fs.stat(pluginPath)
+          if (!pluginStat.isDirectory()) continue
           plugins.push({
             name: plugin.name,
             version: plugin.version || "0.0.0",
