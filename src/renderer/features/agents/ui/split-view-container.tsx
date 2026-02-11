@@ -54,6 +54,12 @@ export function SplitViewContainer({
           <div
             style={{ width: `${currentRatios[i] * 100}%` }}
             className="h-full overflow-hidden relative flex flex-col"
+            onPointerDown={() => {
+              const store = useAgentSubChatStore.getState()
+              if (store.activeSubChatId !== pane.id) {
+                store.setActiveSubChat(pane.id)
+              }
+            }}
           >
             {pane.content}
           </div>

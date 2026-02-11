@@ -1,16 +1,80 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { useAtomValue } from "jotai"
+import { Check, X } from "lucide-react"
 import { Button } from "../../../components/ui/button"
-import { IconDoubleChevronRight, IconSpinner, PlanIcon, MarkdownIcon, CodeIcon } from "../../../components/ui/icons"
+import { IconDoubleChevronRight, IconSpinner, PlanIcon, MarkdownIcon, CodeIcon, IconSidePeek, IconCenterPeek } from "../../../components/ui/icons"
 import { Kbd } from "../../../components/ui/kbd"
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../../components/ui/tooltip"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../../../components/ui/dropdown-menu"
 import { ChatMarkdownRenderer } from "../../../components/chat-markdown-renderer"
 import { cn } from "../../../lib/utils"
 import { trpc } from "../../../lib/trpc"
 import { CopyButton } from "./message-action-buttons"
-import type { AgentMode } from "../atoms"
+import type { AgentMode, PlanDisplayMode } from "../atoms"
+
+const PLAN_VIEW_MODES = [
+  { value: "side-peek" as const, label: "Sidebar", Icon: IconSidePeek },
+  { value: "center-peek" as const, label: "Dialog", Icon: IconCenterPeek },
+]
+
+function PlanViewModeSwitcher({
+  mode,
+  onModeChange,
+  isSplitView = false,
+}: {
+  mode: PlanDisplayMode
+  onModeChange: (mode: PlanDisplayMode) => void
+  isSplitView?: boolean
+}) {
+  const currentMode = PLAN_VIEW_MODES.find((m) => m.value === mode) ?? PLAN_VIEW_MODES[0]
+  const CurrentIcon = currentMode.Icon
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-6 w-6 p-0 flex-shrink-0 hover:bg-foreground/10"
+        >
+          <CurrentIcon className="size-4 text-muted-foreground" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-[160px]">
+        {PLAN_VIEW_MODES.map(({ value, label, Icon }) => {
+          const isDisabled = value === "side-peek" && isSplitView
+          return (
+            <DropdownMenuItem
+              key={value}
+              onClick={() => !isDisabled && onModeChange(value)}
+              className="flex items-center gap-2"
+              disabled={isDisabled}
+            >
+              <Icon className="size-4 text-muted-foreground" />
+              <span className="flex-1">
+                {label}
+                {isDisabled && (
+                  <span className="text-xs text-muted-foreground/60 ml-1">
+                    (split view)
+                  </span>
+                )}
+              </span>
+              {mode === value && !isDisabled && (
+                <Check className="size-4 text-muted-foreground ml-auto" />
+              )}
+            </DropdownMenuItem>
+          )
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
 
 interface AgentPlanSidebarProps {
   chatId: string
@@ -21,6 +85,9 @@ interface AgentPlanSidebarProps {
   refetchTrigger?: number
   /** Current agent mode (plan or agent) */
   mode?: AgentMode
+  displayMode?: PlanDisplayMode
+  onDisplayModeChange?: (mode: PlanDisplayMode) => void
+  isSplitView?: boolean
 }
 
 export function AgentPlanSidebar({
@@ -30,6 +97,9 @@ export function AgentPlanSidebar({
   onBuildPlan,
   refetchTrigger,
   mode = "agent",
+  displayMode = "side-peek",
+  onDisplayModeChange,
+  isSplitView = false,
 }: AgentPlanSidebarProps) {
   // View mode: rendered markdown or plaintext
   const [viewMode, setViewMode] = useState<"rendered" | "plaintext">("rendered")
@@ -71,8 +141,19 @@ export function AgentPlanSidebar({
             className="h-6 w-6 p-0 hover:bg-foreground/10 transition-[background-color,transform] duration-150 ease-out active:scale-[0.97] text-foreground flex-shrink-0 rounded-md"
             aria-label="Close plan"
           >
-            <IconDoubleChevronRight className="h-4 w-4" />
+            {displayMode === "side-peek" ? (
+              <IconDoubleChevronRight className="h-4 w-4" />
+            ) : (
+              <X className="h-4 w-4" />
+            )}
           </Button>
+          {onDisplayModeChange && (
+            <PlanViewModeSwitcher
+              mode={displayMode}
+              onModeChange={onDisplayModeChange}
+              isSplitView={isSplitView}
+            />
+          )}
           <span className="text-sm font-medium truncate">{planTitle}</span>
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">

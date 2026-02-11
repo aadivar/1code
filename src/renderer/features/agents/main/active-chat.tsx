@@ -132,6 +132,7 @@ import {
   pendingPrMessageAtom,
   pendingReviewMessageAtom,
   pendingUserQuestionsAtom,
+  planDisplayModeAtom,
   planEditRefetchTriggerAtomFamily,
   planSidebarOpenAtomFamily,
   QUESTIONS_SKIPPED_MESSAGE,
@@ -145,6 +146,7 @@ import {
   undoStackAtom,
   workspaceDiffCacheAtomFamily,
   type AgentMode,
+  type PlanDisplayMode,
   type SelectedCommit
 } from "../atoms"
 import { BUILTIN_SLASH_COMMANDS } from "../commands"
@@ -3075,11 +3077,11 @@ const ChatViewInner = memo(function ChatViewInner({
   // Handle pending "Build plan" from sidebar
   useEffect(() => {
     // Only trigger if this is the target sub-chat and we're active
-    if (pendingBuildPlanSubChatId === subChatId && isActive && !isSplitPane) {
+    if (pendingBuildPlanSubChatId === subChatId && isActive) {
       setPendingBuildPlanSubChatId(null) // Clear immediately to prevent double-trigger
       handleApprovePlan()
     }
-  }, [pendingBuildPlanSubChatId, subChatId, isActive, isSplitPane, setPendingBuildPlanSubChatId, handleApprovePlan])
+  }, [pendingBuildPlanSubChatId, subChatId, isActive, setPendingBuildPlanSubChatId, handleApprovePlan])
 
   // Detect PR URLs in assistant messages and store them
   // Initialize with existing PR URL to prevent duplicate toast on re-mount
@@ -4710,11 +4712,19 @@ export function ChatView({
     [activeSubChatIdForPlan],
   )
   const [isPlanSidebarOpen, setIsPlanSidebarOpen] = useAtom(planSidebarAtom)
+  const [planDisplayMode, setPlanDisplayMode] = useAtom(planDisplayModeAtom)
   const currentPlanPathAtom = useMemo(
     () => currentPlanPathAtomFamily(activeSubChatIdForPlan || ""),
     [activeSubChatIdForPlan],
   )
   const [currentPlanPath, setCurrentPlanPath] = useAtom(currentPlanPathAtom)
+
+  // Effective plan display mode: force center-peek in split view, otherwise use user preference
+  // Computed early because mutual exclusion logic needs it
+  const isSplitViewForPlan = useAgentSubChatStore(
+    useShallow((state) => state.splitPaneIds.length >= 2 && state.splitPaneIds.includes(state.activeSubChatId))
+  )
+  const effectivePlanDisplayMode: PlanDisplayMode = isSplitViewForPlan ? "center-peek" : planDisplayMode
 
   // File viewer sidebar state - per-chat open file path
   const fileViewerAtom = useMemo(
@@ -4736,16 +4746,16 @@ export function ChatView({
   const toggleTerminalHotkey = useResolvedHotkeyDisplay("toggle-terminal")
 
   // Close plan sidebar when switching to a sub-chat that has no plan
+  // Skip in split view — clicking between panes shouldn't close the plan dialog
   const prevSubChatIdRef = useRef(activeSubChatIdForPlan)
   useEffect(() => {
     if (prevSubChatIdRef.current !== activeSubChatIdForPlan) {
-      // Sub-chat changed - if new one has no plan path, close sidebar
-      if (!currentPlanPath) {
+      if (!currentPlanPath && !isSplitViewForPlan) {
         setIsPlanSidebarOpen(false)
       }
       prevSubChatIdRef.current = activeSubChatIdForPlan
     }
-  }, [activeSubChatIdForPlan, currentPlanPath, setIsPlanSidebarOpen])
+  }, [activeSubChatIdForPlan, currentPlanPath, isSplitViewForPlan, setIsPlanSidebarOpen])
   const setPendingBuildPlanSubChatId = useSetAtom(pendingBuildPlanSubChatIdAtom)
 
   // Read plan edit refetch trigger from atom (set by ChatViewInner when Edit completes)
@@ -4813,14 +4823,16 @@ export function ChatView({
   // Track previous states to detect opens/closes
   const prevSidebarStatesRef = useRef({
     details: isDetailsSidebarOpen,
-    plan: isPlanSidebarOpen && !!currentPlanPath,
+    plan: isPlanSidebarOpen && !!currentPlanPath && effectivePlanDisplayMode === "side-peek",
     terminal: isTerminalSidebarOpen,
   })
 
   useEffect(() => {
     const prev = prevSidebarStatesRef.current
     const auto = autoClosedStateRef.current
-    const isPlanOpen = isPlanSidebarOpen && !!currentPlanPath
+    // Only treat plan as a physical sidebar conflict when in side-peek mode
+    // In center-peek (dialog) mode, plan floats above everything — no conflict
+    const isPlanOpen = isPlanSidebarOpen && !!currentPlanPath && effectivePlanDisplayMode === "side-peek"
 
     // Detect state changes
     const detailsJustOpened = isDetailsSidebarOpen && !prev.details
@@ -4885,6 +4897,7 @@ export function ChatView({
     isDetailsSidebarOpen,
     isPlanSidebarOpen,
     currentPlanPath,
+    effectivePlanDisplayMode,
     isTerminalSidebarOpen,
     terminalDisplayMode,
     setIsDetailsSidebarOpen,
@@ -5101,6 +5114,12 @@ export function ChatView({
       splitPaneIds: state.splitPaneIds,
     }))
   )
+
+  // isSplitView alias using local splitPaneIds (for JSX rendering)
+  const isSplitView = splitPaneIds.length >= 2 && splitPaneIds.includes(activeSubChatId)
+  const handlePlanDisplayModeChange = useCallback((mode: PlanDisplayMode) => {
+    setPlanDisplayMode(mode)
+  }, [setPlanDisplayMode])
 
   // Clear sub-chat "unseen changes" indicator when sub-chat becomes active
   useEffect(() => {
@@ -7259,9 +7278,8 @@ Make sure to preserve all functionality from both branches when resolving confli
           )}
         </div>
 
-        {/* Plan Sidebar - shows plan files on the right (leftmost right sidebar) */}
-        {/* Only show when we have an active sub-chat with a plan */}
-        {!isMobileFullscreen && activeSubChatIdForPlan && (
+        {/* Plan Sidebar - side-peek mode (ResizableSidebar) */}
+        {!isMobileFullscreen && activeSubChatIdForPlan && effectivePlanDisplayMode === "side-peek" && (
           <ResizableSidebar
             isOpen={isPlanSidebarOpen && !!currentPlanPath}
             onClose={() => setIsPlanSidebarOpen(false)}
@@ -7283,8 +7301,29 @@ Make sure to preserve all functionality from both branches when resolving confli
               onBuildPlan={handleApprovePlanFromSidebar}
               refetchTrigger={planEditRefetchTrigger}
               mode={currentMode}
+              displayMode="side-peek"
+              onDisplayModeChange={handlePlanDisplayModeChange}
             />
           </ResizableSidebar>
+        )}
+        {/* Plan Sidebar - center-peek mode (Dialog overlay) */}
+        {activeSubChatIdForPlan && effectivePlanDisplayMode === "center-peek" && isPlanSidebarOpen && !!currentPlanPath && (
+          <DiffCenterPeekDialog
+            isOpen={true}
+            onClose={() => setIsPlanSidebarOpen(false)}
+          >
+            <AgentPlanSidebar
+              chatId={activeSubChatIdForPlan}
+              planPath={currentPlanPath}
+              onClose={() => setIsPlanSidebarOpen(false)}
+              onBuildPlan={handleApprovePlanFromSidebar}
+              refetchTrigger={planEditRefetchTrigger}
+              mode={currentMode}
+              displayMode="center-peek"
+              onDisplayModeChange={handlePlanDisplayModeChange}
+              isSplitView={isSplitView}
+            />
+          </DiffCenterPeekDialog>
         )}
 
         {/* Diff View - hidden on mobile fullscreen and when diff is not available */}
@@ -7497,7 +7536,7 @@ Make sure to preserve all functionality from both branches when resolving confli
             onBuildPlan={handleApprovePlanFromSidebar}
             planRefetchTrigger={planEditRefetchTrigger}
             activeSubChatId={activeSubChatIdForPlan}
-            isPlanSidebarOpen={isPlanSidebarOpen && !!currentPlanPath}
+            isPlanSidebarOpen={isPlanSidebarOpen && !!currentPlanPath && effectivePlanDisplayMode === "side-peek"}
             isTerminalSidebarOpen={isTerminalSidebarOpen}
             isDiffSidebarOpen={isDiffSidebarOpen}
             diffDisplayMode={diffDisplayMode}

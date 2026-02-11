@@ -197,10 +197,14 @@ export const IsolatedMessageGroup = memo(function IsolatedMessageGroup({
                   if (imageParts.length > 0) {
                     parts.push(imageParts.length === 1 ? "image" : `${imageParts.length} images`)
                   }
-                  const quoteCount = textMentions.filter(m => m.type === "quote" || m.type === "pasted").length
+                  const quoteCount = textMentions.filter(m => m.type === "quote").length
+                  const pastedCount = textMentions.filter(m => m.type === "pasted").length
                   const codeCount = textMentions.filter(m => m.type === "diff").length
                   if (quoteCount > 0) {
                     parts.push(quoteCount === 1 ? "selected text" : `${quoteCount} text selections`)
+                  }
+                  if (pastedCount > 0) {
+                    parts.push(pastedCount === 1 ? "pasted text" : `${pastedCount} pasted texts`)
                   }
                   if (codeCount > 0) {
                     parts.push(codeCount === 1 ? "code selection" : `${codeCount} code selections`)

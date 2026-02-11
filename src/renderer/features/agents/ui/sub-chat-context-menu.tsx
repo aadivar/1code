@@ -92,7 +92,6 @@ export function SubChatContextMenu({
   splitPaneIds,
 }: SubChatContextMenuProps) {
   const closeTabShortcut = useCloseTabShortcut()
-  const newAgentSplitHotkey = useResolvedHotkeyDisplay("new-agent-split")
 
   const handleExport = useCallback((format: ExportFormat) => {
     if (!chatId) return
@@ -138,11 +137,7 @@ export function SubChatContextMenu({
           </ContextMenuSubContent>
         </ContextMenuSub>
       )}
-      {isDesktopApp() && chatId && (
-        <ContextMenuItem onClick={() => openInNewWindow(chatId, subChat.id, isSplitTab ? splitPaneIds : undefined)}>
-          Open in new window
-        </ContextMenuItem>
-      )}
+      <ContextMenuSeparator />
       {isSplitTab ? (
         <>
           {splitPaneCount > 2 && onRemoveFromSplit && (
@@ -160,12 +155,15 @@ export function SubChatContextMenu({
         <ContextMenuItem
           onClick={() => onOpenInSplit(subChat.id)}
           disabled={isActiveTab || isOnlyChat || splitPaneCount >= 6}
-          className="justify-between"
         >
           Add as Split
-          {newAgentSplitHotkey && <Kbd>{newAgentSplitHotkey}</Kbd>}
         </ContextMenuItem>
       ) : null}
+      {isDesktopApp() && chatId && (
+        <ContextMenuItem onClick={() => openInNewWindow(chatId, subChat.id, isSplitTab ? splitPaneIds : undefined)}>
+          Open in new window
+        </ContextMenuItem>
+      )}
       <ContextMenuSeparator />
 
       {showCloseTabOptions ? (

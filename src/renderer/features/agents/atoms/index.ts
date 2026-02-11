@@ -780,6 +780,16 @@ export const agentsPlanSidebarWidthAtom = atomWithStorage<number>(
   { getOnInit: true },
 )
 
+// Plan sidebar display mode - sidebar (side peek) or center dialog
+export type PlanDisplayMode = "side-peek" | "center-peek"
+
+export const planDisplayModeAtom = atomWithStorage<PlanDisplayMode>(
+  "agents:planDisplayMode",
+  "side-peek",
+  undefined,
+  { getOnInit: true },
+)
+
 // Plan sidebar open state storage - stores per chatId (persisted)
 // Uses window-scoped storage so each window can have independent plan sidebar states
 const planSidebarOpenStorageAtom = atomWithWindowStorage<Record<string, boolean>>(
