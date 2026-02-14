@@ -5,6 +5,7 @@ import * as path from "path"
 import * as os from "os"
 import matter from "gray-matter"
 import { discoverInstalledPlugins, getPluginComponentPaths } from "../../plugins"
+import { isDirentDirectory } from "../../fs/dirent"
 import { getEnabledPlugins } from "./claude-settings"
 
 export interface FileSkill {
@@ -54,18 +55,8 @@ async function scanSkillsDirectory(
     const entries = await fs.readdir(dir, { withFileTypes: true })
 
     for (const entry of entries) {
-      // Check if entry is a directory or a symlink pointing to a directory
-      let isDir = entry.isDirectory()
-      if (!isDir && entry.isSymbolicLink()) {
-        try {
-          const targetPath = path.join(dir, entry.name)
-          const stat = await fs.stat(targetPath) // stat() follows symlinks
-          isDir = stat.isDirectory()
-        } catch {
-          // Symlink target doesn't exist or is inaccessible - skip it
-          continue
-        }
-      }
+      // Check if entry is a directory (follows symlinks)
+      const isDir = await isDirentDirectory(dir, entry)
       if (!isDir) continue
 
       // Validate entry name for security (prevent path traversal)

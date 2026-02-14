@@ -5,6 +5,8 @@ import type { CommitInfo } from "./components/history-view";
 
 interface ChangesPanelProps {
 	worktreePath: string;
+	/** Controlled active tab for ChangesView */
+	activeTab?: "changes" | "history";
 	/** Currently selected file path for highlighting */
 	selectedFilePath?: string | null;
 	/** Callback when a file is selected */
@@ -21,6 +23,8 @@ interface ChangesPanelProps {
 	onCreatePr?: () => void;
 	/** Called after a successful commit to reset diff view state */
 	onCommitSuccess?: () => void;
+	/** Called after discarding/deleting changes to refresh diff */
+	onDiscardSuccess?: () => void;
 	/** Available subchats for filtering */
 	subChats?: SubChatFilterItem[];
 	/** Currently selected subchat ID for filtering (passed from Review button) */
@@ -41,11 +45,13 @@ interface ChangesPanelProps {
 
 export function ChangesPanel({
 	worktreePath,
+	activeTab,
 	selectedFilePath,
 	onFileSelect,
 	onFileOpenPinned,
 	onCreatePr,
 	onCommitSuccess,
+	onDiscardSuccess,
 	subChats,
 	initialSubChatFilter,
 	chatId,
@@ -67,11 +73,13 @@ export function ChangesPanel({
 		<div className="flex flex-col h-full overflow-hidden">
 			<ChangesView
 				worktreePath={worktreePath}
+				activeTab={activeTab}
 				selectedFilePath={selectedFilePath}
 				onFileSelect={onFileSelect}
 				onFileOpenPinned={onFileOpenPinned}
 				onCreatePr={onCreatePr}
 				onCommitSuccess={onCommitSuccess}
+				onDiscardSuccess={onDiscardSuccess}
 				subChats={subChats}
 				initialSubChatFilter={initialSubChatFilter}
 				chatId={chatId}

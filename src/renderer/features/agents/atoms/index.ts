@@ -378,6 +378,45 @@ export const diffFilesCollapsedAtomFamily = atomFamily((chatId: string) =>
   ),
 )
 
+// Collapsible steps expanded state per message (session-only)
+// Map<`${subChatId}:${messageId}`, isExpanded>
+const assistantMessageStepsExpandedStorageAtom = atom<Record<string, boolean | undefined>>({})
+
+export const assistantMessageStepsExpandedAtomFamily = atomFamily((key: string) =>
+  atom(
+    (get) => get(assistantMessageStepsExpandedStorageAtom)[key],
+    (get, set, isExpanded: boolean) => {
+      const current = get(assistantMessageStepsExpandedStorageAtom)
+      set(assistantMessageStepsExpandedStorageAtom, { ...current, [key]: isExpanded })
+    },
+  ),
+)
+
+// Helpers for split view ratio management
+export function getDefaultRatios(n: number): number[] {
+  if (n <= 0) return []
+  return Array(n).fill(1 / n) as number[]
+}
+
+export function addPaneRatio(ratios: number[]): number[] {
+  const n = ratios.length + 1
+  const scale = (n - 1) / n
+  return [...ratios.map(r => r * scale), 1 / n]
+}
+
+export function removePaneRatio(ratios: number[], removeIdx: number): number[] {
+  if (removeIdx < 0 || removeIdx >= ratios.length) return getDefaultRatios(ratios.length)
+  const removed = ratios[removeIdx]!
+  const rest = ratios.filter((_, i) => i !== removeIdx)
+  if (rest.length === 0) return []
+  const sum = rest.reduce((a, b) => a + b, 0)
+  if (sum === 0) return getDefaultRatios(rest.length)
+  const result = rest.map(r => r + (r / sum) * removed)
+  // Normalize to prevent floating-point drift
+  const total = result.reduce((a, b) => a + b, 0)
+  return total > 0 ? result.map(r => r / total) : getDefaultRatios(rest.length)
+}
+
 // Sub-chats display mode - tabs (horizontal) or sidebar (vertical list)
 // Window-scoped so each window can have its own layout preference
 export const agentsSubChatsSidebarModeAtom = atomWithWindowStorage<
@@ -555,9 +594,13 @@ export type SelectedCommit = {
 } | null
 export const selectedCommitAtom = atom<SelectedCommit>(null)
 
+// Active tab in diff sidebar (Changes/History)
+// Exposed as atom so external components (e.g. git activity badges) can switch tabs
+export const diffActiveTabAtom = atom<"changes" | "history">("changes")
+
 // Pending PR message to send to chat
 // Set by ChatView when "Create PR" is clicked, consumed by ChatViewInner
-export const pendingPrMessageAtom = atom<string | null>(null)
+export const pendingPrMessageAtom = atom<{ message: string; subChatId: string } | null>(null)
 
 // Pending Review message to send to chat
 // Set by ChatView when "Review" is clicked, consumed by ChatViewInner
@@ -733,6 +776,16 @@ export const openLocallyChatIdAtom = atom<string | null>(null)
 export const agentsPlanSidebarWidthAtom = atomWithStorage<number>(
   "agents-plan-sidebar-width",
   500,
+  undefined,
+  { getOnInit: true },
+)
+
+// Plan sidebar display mode - sidebar (side peek) or center dialog
+export type PlanDisplayMode = "side-peek" | "center-peek"
+
+export const planDisplayModeAtom = atomWithStorage<PlanDisplayMode>(
+  "agents:planDisplayMode",
+  "side-peek",
   undefined,
   { getOnInit: true },
 )

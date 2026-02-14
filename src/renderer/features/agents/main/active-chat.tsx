@@ -16,8 +16,8 @@ import {
   IconCloseSidebarRight,
   IconOpenSidebarRight,
   IconSpinner,
-  IconTextUndo,
   PauseIcon,
+  UnarchiveIcon,
   VolumeIcon
 } from "../../../components/ui/icons"
 import { Kbd } from "../../../components/ui/kbd"
@@ -33,8 +33,8 @@ import {
 } from "../../../components/ui/tooltip"
 // e2b API routes are used instead of useSandboxManager for agents
 // import { clearSubChatSelectionAtom, isSubChatMultiSelectModeAtom, selectedSubChatIdsAtom } from "@/lib/atoms/agent-subchat-selection"
+import { ResizableBottomPanel } from "@/components/ui/resizable-bottom-panel"
 import { Chat, useChat } from "@ai-sdk/react"
-import type { DiffViewMode } from "../ui/agent-diff-view"
 import { atom, useAtom, useAtomValue, useSetAtom } from "jotai"
 import {
   ArrowDown,
@@ -56,6 +56,7 @@ import {
   useState
 } from "react"
 import { flushSync } from "react-dom"
+import type { VirtuosoHandle } from "react-virtuoso"
 import { toast } from "sonner"
 import { useShallow } from "zustand/react/shallow"
 import type { FileStatus } from "../../../../shared/changes-types"
@@ -80,9 +81,11 @@ import { trpc, trpcClient } from "../../../lib/trpc"
 import { cn } from "../../../lib/utils"
 import { isDesktopApp } from "../../../lib/utils/platform"
 import { ChangesPanel } from "../../changes"
+import { useCommitActions } from "../../changes/components/commit-input"
 import { DiffCenterPeekDialog } from "../../changes/components/diff-center-peek-dialog"
 import { DiffFullPageView } from "../../changes/components/diff-full-page-view"
 import { DiffSidebarHeader } from "../../changes/components/diff-sidebar-header"
+import { usePushAction } from "../../changes/hooks/use-push-action"
 import { getStatusIndicator } from "../../changes/utils/status"
 import {
   detailsSidebarOpenAtom,
@@ -91,9 +94,8 @@ import {
 import { DetailsSidebar } from "../../details-sidebar/details-sidebar"
 import { FileViewerSidebar } from "../../file-viewer"
 import { FileSearchDialog } from "../../file-viewer/components/file-search-dialog"
-import { terminalSidebarOpenAtomFamily, terminalDisplayModeAtom, terminalBottomHeightAtom } from "../../terminal/atoms"
-import { TerminalSidebar, TerminalBottomPanelContent } from "../../terminal/terminal-sidebar"
-import { ResizableBottomPanel } from "@/components/ui/resizable-bottom-panel"
+import { terminalBottomHeightAtom, terminalDisplayModeAtom, terminalSidebarOpenAtomFamily } from "../../terminal/atoms"
+import { TerminalBottomPanelContent, TerminalSidebar } from "../../terminal/terminal-sidebar"
 import {
   agentsChangesPanelCollapsedAtom,
   agentsChangesPanelWidthAtom,
@@ -104,16 +106,17 @@ import {
   agentsSubChatsSidebarModeAtom,
   agentsSubChatUnseenChangesAtom,
   agentsUnseenChangesAtom,
+  clearLoading,
+  compactingSubChatsAtom,
+  currentPlanPathAtomFamily,
+  diffActiveTabAtom,
+  diffSidebarOpenAtomFamily,
+  diffViewDisplayModeAtom,
+  expiredUserQuestionsAtom,
   fileSearchDialogOpenAtom,
   fileViewerDisplayModeAtom,
   fileViewerOpenAtomFamily,
   fileViewerSidebarWidthAtom,
-  clearLoading,
-  compactingSubChatsAtom,
-  currentPlanPathAtomFamily,
-  diffSidebarOpenAtomFamily,
-  diffViewDisplayModeAtom,
-  expiredUserQuestionsAtom,
   filteredDiffFilesAtom,
   filteredSubChatIdAtom,
   isCreatingPrAtom,
@@ -124,10 +127,12 @@ import {
   pendingAuthRetryMessageAtom,
   pendingBuildPlanSubChatIdAtom,
   pendingConflictResolutionMessageAtom,
+  pendingMentionAtom,
   pendingPlanApprovalsAtom,
   pendingPrMessageAtom,
   pendingReviewMessageAtom,
   pendingUserQuestionsAtom,
+  planDisplayModeAtom,
   planEditRefetchTriggerAtomFamily,
   planSidebarOpenAtomFamily,
   QUESTIONS_SKIPPED_MESSAGE,
@@ -137,11 +142,11 @@ import {
   setLoading,
   subChatFilesAtom,
   subChatModeAtomFamily,
+  suppressInputFocusAtom,
   undoStackAtom,
   workspaceDiffCacheAtomFamily,
-  pendingMentionAtom,
-  suppressInputFocusAtom,
   type AgentMode,
+  type PlanDisplayMode,
   type SelectedCommit
 } from "../atoms"
 import { BUILTIN_SLASH_COMMANDS } from "../commands"
@@ -150,13 +155,13 @@ import { OpenLocallyDialog } from "../components/open-locally-dialog"
 import { PreviewSetupHoverCard } from "../components/preview-setup-hover-card"
 import type { TextSelectionSource } from "../context/text-selection-context"
 import { TextSelectionProvider } from "../context/text-selection-context"
-import { useAgentsFileUpload } from "../hooks/use-agents-file-upload"
+import { useAgentsFileUpload, type UploadedImage } from "../hooks/use-agents-file-upload"
 import { useAutoImport } from "../hooks/use-auto-import"
 import { useChangedFilesTracking } from "../hooks/use-changed-files-tracking"
 import { useDesktopNotifications } from "../hooks/use-desktop-notifications"
 import { useFocusInputOnEnter } from "../hooks/use-focus-input-on-enter"
 import { useHaptic } from "../hooks/use-haptic"
-import { usePastedTextFiles } from "../hooks/use-pasted-text-files"
+import { usePastedTextFiles, type PastedTextFile } from "../hooks/use-pasted-text-files"
 import { useTextContextSelection } from "../hooks/use-text-context-selection"
 import { useToggleFocusOnCmdEsc } from "../hooks/use-toggle-focus-on-cmd-esc"
 import {
@@ -165,11 +170,12 @@ import {
 } from "../lib/drafts"
 import { IPCChatTransport } from "../lib/ipc-chat-transport"
 import {
-  createQueueItem,
-  generateQueueId,
+  createQueueItem, createTextPreview, generateQueueId,
+  toQueuedDiffTextContext,
   toQueuedFile,
   toQueuedImage,
-  toQueuedTextContext,
+  toQueuedPastedText,
+  toQueuedTextContext, type DiffTextContext, type SelectedTextContext
 } from "../lib/queue-utils"
 import { RemoteChatTransport } from "../lib/remote-chat-transport"
 import {
@@ -184,12 +190,18 @@ import {
 } from "../search"
 import { agentChatStore } from "../stores/agent-chat-store"
 import { EMPTY_QUEUE, useMessageQueueStore } from "../stores/message-queue-store"
-import { clearSubChatCaches, isRollingBackAtom, rollbackHandlerAtom, syncMessagesWithStatusAtom } from "../stores/message-store"
+import {
+  clearSubChatCaches,
+  findRollbackTargetSdkUuidForUserIndex,
+  isRollingBackAtom,
+  syncMessagesWithStatusAtom
+} from "../stores/message-store"
 import { useStreamingStatusStore } from "../stores/streaming-status-store"
 import {
   useAgentSubChatStore,
   type SubChatMeta,
 } from "../stores/sub-chat-store"
+import type { DiffViewMode } from "../ui/agent-diff-view"
 import {
   AgentDiffView,
   diffViewModeAtom,
@@ -209,12 +221,14 @@ import { AgentsHeaderControls } from "../ui/agents-header-controls"
 import { ChatTitleEditor } from "../ui/chat-title-editor"
 import { MobileChatHeader } from "../ui/mobile-chat-header"
 import { QuickCommentInput } from "../ui/quick-comment-input"
+import { SplitViewContainer } from "../ui/split-view-container"
 import { SubChatSelector } from "../ui/sub-chat-selector"
 import { SubChatStatusCard } from "../ui/sub-chat-status-card"
 import { TextSelectionPopover } from "../ui/text-selection-popover"
 import { autoRenameAgentChat } from "../utils/auto-rename"
 import { generateCommitToPrMessage, generatePrMessage, generateReviewMessage } from "../utils/pr-message"
 import { ChatInputArea } from "./chat-input-area"
+import { USE_VIRTUOSO_CHAT, VIRTUOSO_FOLLOW_BOTTOM_THRESHOLD_PX } from "./chat-render-flags"
 import { IsolatedMessagesSection } from "./isolated-messages-section"
 const clearSubChatSelectionAtom = atom(null, () => {})
 const isSubChatMultiSelectModeAtom = atom(false)
@@ -229,6 +243,13 @@ function utf8ToBase64(str: string): string {
   const bytes = new TextEncoder().encode(str)
   const binString = Array.from(bytes, (byte) => String.fromCodePoint(byte)).join("")
   return btoa(binString)
+}
+
+// UTF-8 safe base64 decoding (atob doesn't support Unicode)
+function base64ToUtf8(base64: string): string {
+  const binString = atob(base64)
+  const bytes = Uint8Array.from(binString, (char) => char.codePointAt(0)!)
+  return new TextDecoder().decode(bytes)
 }
 
 /** Wait for streaming to finish by subscribing to the status store.
@@ -343,9 +364,9 @@ const CodexIcon = (props: React.SVGProps<SVGSVGElement>) => (
 
 // Model options for Claude Code
 const claudeModels = [
-  { id: "opus", name: "Opus" },
-  { id: "sonnet", name: "Sonnet" },
-  { id: "haiku", name: "Haiku" },
+  { id: "opus", name: "Opus 4.6" },
+  { id: "sonnet", name: "Sonnet 4.5" },
+  { id: "haiku", name: "Haiku 4.5" },
 ]
 
 // Agent providers
@@ -747,38 +768,6 @@ function PlayButton({
   )
 }
 
-// Rollback button component for reverting to a previous message state
-function RollbackButton({
-  disabled = false,
-  onRollback,
-  isRollingBack = false,
-}: {
-  disabled?: boolean
-  onRollback: () => void
-  isRollingBack?: boolean
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          onClick={onRollback}
-          disabled={disabled || isRollingBack}
-          tabIndex={-1}
-          className={cn(
-            "p-1.5 rounded-md transition-[background-color,transform] duration-150 ease-out hover:bg-accent active:scale-[0.97]",
-            isRollingBack && "opacity-50 cursor-not-allowed",
-          )}
-        >
-          <IconTextUndo className="w-3.5 h-3.5 text-muted-foreground" />
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">
-        {isRollingBack ? "Rolling back..." : "Rollback to here"}
-      </TooltipContent>
-    </Tooltip>
-  )
-}
-
 // Isolated scroll-to-bottom button - uses own scroll listener to avoid re-renders of parent
 const ScrollToBottomButton = memo(function ScrollToBottomButton({
   containerRef,
@@ -786,18 +775,28 @@ const ScrollToBottomButton = memo(function ScrollToBottomButton({
   hasStackedCards = false,
   subChatId,
   isActive = true,
+  setVisibleRef,
 }: {
   containerRef: React.RefObject<HTMLElement | null>
   onScrollToBottom: () => void
   hasStackedCards?: boolean
   subChatId?: string
   isActive?: boolean
+  setVisibleRef?: React.MutableRefObject<((v: boolean) => void) | null>
 }) {
   const [isVisible, setIsVisible] = useState(false)
 
   // Keep isActive in ref for scroll event handler
   const isActiveRef = useRef(isActive)
   isActiveRef.current = isActive
+
+  // Expose setIsVisible to parent via ref (for Virtuoso atBottomStateChange)
+  useEffect(() => {
+    if (setVisibleRef) setVisibleRef.current = setIsVisible
+    return () => {
+      if (setVisibleRef) setVisibleRef.current = null
+    }
+  }, [setVisibleRef])
 
   useEffect(() => {
     // Skip scroll monitoring for inactive tabs (keep-alive)
@@ -867,9 +866,14 @@ const ScrollToBottomButton = memo(function ScrollToBottomButton({
               transition={{ duration: 0.2, ease: [0.23, 1, 0.32, 1] }}
               onClick={onScrollToBottom}
               className={cn(
-                "absolute right-4 p-2 rounded-full bg-background border border-border shadow-md hover:bg-accent active:scale-[0.97] transition-colors z-20",
-                hasStackedCards ? "bottom-44 sm:bottom-36" : "bottom-32 sm:bottom-24"
+                "absolute p-2 rounded-full bg-background border border-border shadow-md hover:bg-accent active:scale-[0.97] transition-[color,background-color,bottom] duration-200 z-20",
               )}
+              style={{
+                right: "0.75rem",
+                // Wide screen (container > 48rem): button sits in bottom-right corner
+                // Narrow screen (container <= 48rem): button lifts above the input
+                bottom: "clamp(0.75rem, (48rem - var(--chat-container-width, 0px)) * 1000, calc(var(--chat-input-height, 4rem) + 1rem))",
+              }}
               aria-label="Scroll to bottom"
             >
               <ArrowDown className="h-4 w-4 text-muted-foreground" />
@@ -924,19 +928,15 @@ function MessageGroup({ children, isLastGroup }: MessageGroupProps) {
     return () => observer.disconnect()
   }, [])
 
+  const lastGroupMinHeight = isLastGroup
+    ? { minHeight: "calc(var(--chat-container-height) - 48px)" }
+    : {}
+
   return (
     <div
       ref={groupRef}
       className="relative"
-      style={{
-        // content-visibility: auto - браузер пропускает layout/paint для элементов вне viewport
-        // Это ОГРОМНАЯ оптимизация для длинных чатов - рендерится только видимое
-        contentVisibility: "auto",
-        // Примерная высота для правильного скроллбара до рендеринга
-        containIntrinsicSize: "auto 200px",
-        // Последняя группа имеет минимальную высоту контейнера чата (минус отступ)
-        ...(isLastGroup && { minHeight: "calc(var(--chat-container-height) - 32px)" }),
-      }}
+      style={lastGroupMinHeight}
       data-last-group={isLastGroup || undefined}
     >
       {children}
@@ -1054,6 +1054,8 @@ interface DiffSidebarContentProps {
   onCreatePr?: () => void
   // Called after successful commit to reset diff view state
   onCommitSuccess?: () => void
+  // Called after discarding/deleting changes to refresh diff
+  onDiscardSuccess?: () => void
   // Subchats with changed files for filtering
   subChats?: Array<{ id: string; name: string; filePaths: string[]; fileCount: number }>
   // Initial subchat filter (e.g., from Review button)
@@ -1117,6 +1119,7 @@ const DiffSidebarContent = memo(function DiffSidebarContent({
   diffMode,
   setDiffMode,
   onCreatePr,
+  onDiscardSuccess,
   subChats = [],
 }: Omit<DiffSidebarContentProps, 'selectedFilePath' | 'onFileSelect' | 'onCommitSuccess' | 'initialSubChatFilter' | 'onSelectNextFile'>) {
   // Get values from context instead of props
@@ -1147,8 +1150,8 @@ const DiffSidebarContent = memo(function DiffSidebarContent({
   const [isChangesPanelCollapsed, setIsChangesPanelCollapsed] = useAtom(agentsChangesPanelCollapsedAtom)
   const [isResizing, setIsResizing] = useState(false)
 
-  // Active tab state (Changes/History)
-  const [activeTab, setActiveTab] = useState<"changes" | "history">("changes")
+  // Active tab state (Changes/History) - atom so external components can switch tabs
+  const [activeTab, setActiveTab] = useAtom(diffActiveTabAtom)
 
   // Register the reset function so handleCloseDiff can reset to "changes" tab before closing
   // This prevents React 19 ref cleanup issues with HistoryView's ContextMenu components
@@ -1277,11 +1280,13 @@ const DiffSidebarContent = memo(function DiffSidebarContent({
           )}>
             <ChangesPanel
               worktreePath={worktreePath}
+              activeTab={activeTab}
               selectedFilePath={selectedFilePath}
               onFileSelect={handleDiffFileSelect}
               onFileOpenPinned={() => {}}
               onCreatePr={onCreatePr}
               onCommitSuccess={handleCommitSuccess}
+              onDiscardSuccess={onDiscardSuccess}
               subChats={subChats}
               initialSubChatFilter={filteredSubChatId}
               chatId={chatId}
@@ -1390,11 +1395,13 @@ const DiffSidebarContent = memo(function DiffSidebarContent({
         >
           <ChangesPanel
             worktreePath={worktreePath}
+            activeTab={activeTab}
             selectedFilePath={selectedFilePath}
             onFileSelect={handleDiffFileSelect}
             onFileOpenPinned={() => {}}
             onCreatePr={onCreatePr}
             onCommitSuccess={handleCommitSuccess}
+            onDiscardSuccess={onDiscardSuccess}
             subChats={subChats}
             initialSubChatFilter={filteredSubChatId}
             chatId={chatId}
@@ -1605,7 +1612,7 @@ const DiffStateProvider = memo(function DiffStateProvider({
     })
     setTimeout(() => {
       fetchDiffStats()
-    }, 500)
+    }, 2000)
   }, [setSelectedFilePath, setFilteredDiffFiles, setParsedFileDiffs, setDiffContent, setPrefetchedFileContents, setDiffStats, fetchDiffStats])
 
   const handleCloseDiff = useCallback(() => {
@@ -1691,6 +1698,7 @@ interface DiffSidebarRendererProps {
   isCommittingToPr: boolean
   subChatsWithFiles: Array<{ id: string; name: string; filePaths: string[]; fileCount: number }>
   setDiffStats: (stats: { isLoading: boolean; hasChanges: boolean; fileCount: number; additions: number; deletions: number }) => void
+  onDiscardSuccess?: () => void
 }
 
 const DiffSidebarRenderer = memo(function DiffSidebarRenderer({
@@ -1737,9 +1745,24 @@ const DiffSidebarRenderer = memo(function DiffSidebarRenderer({
   isCommittingToPr,
   subChatsWithFiles,
   setDiffStats,
+  onDiscardSuccess,
 }: DiffSidebarRendererProps) {
   // Get callbacks and state from context
   const { handleCloseDiff, viewedCount, handleViewedCountChange } = useDiffState()
+
+  const handleReviewWithAI = useCallback(() => {
+    if (diffDisplayMode !== "side-peek") {
+      handleCloseDiff()
+    }
+    handleReview()
+  }, [diffDisplayMode, handleCloseDiff, handleReview])
+
+  const handleCreatePrWithAI = useCallback(() => {
+    if (diffDisplayMode !== "side-peek") {
+      handleCloseDiff()
+    }
+    handleCreatePr()
+  }, [diffDisplayMode, handleCloseDiff, handleCreatePr])
 
   // Width for responsive layouts - use stored width for sidebar, fixed for dialog/fullpage
   const effectiveWidth = diffDisplayMode === "side-peek"
@@ -1766,11 +1789,11 @@ const DiffSidebarRenderer = memo(function DiffSidebarRenderer({
           isSyncStatusLoading={isGitStatusLoading}
           aheadOfDefault={gitStatus?.ahead ?? 0}
           behindDefault={gitStatus?.behind ?? 0}
-          onReview={handleReview}
+          onReview={handleReviewWithAI}
           isReviewing={isReviewing}
           onCreatePr={handleCreatePrDirect}
           isCreatingPr={isCreatingPr}
-          onCreatePrWithAI={handleCreatePr}
+          onCreatePrWithAI={handleCreatePrWithAI}
           isCreatingPrWithAI={isCreatingPr}
           onMergePr={handleMergePr}
           isMergingPr={mergePrMutation.isPending}
@@ -1826,6 +1849,7 @@ const DiffSidebarRenderer = memo(function DiffSidebarRenderer({
         diffMode={diffMode}
         setDiffMode={setDiffMode}
         onCreatePr={handleCreatePrDirect}
+        onDiscardSuccess={onDiscardSuccess}
         subChats={subChatsWithFiles}
       />
     </div>
@@ -1901,6 +1925,7 @@ const ChatViewInner = memo(function ChatViewInner({
   onRestoreWorkspace,
   existingPrUrl,
   isActive = true,
+  isSplitPane = false,
 }: {
   chat: Chat<any>
   subChatId: string
@@ -1923,9 +1948,12 @@ const ChatViewInner = memo(function ChatViewInner({
   onRestoreWorkspace?: () => void
   existingPrUrl?: string | null
   isActive?: boolean
+  isSplitPane?: boolean
 }) {
   const hasTriggeredRenameRef = useRef(false)
   const hasTriggeredAutoGenerateRef = useRef(false)
+
+  const useVirtuosoChat = USE_VIRTUOSO_CHAT
 
   // Keep isActive in ref for use in callbacks (avoid stale closures)
   const isActiveRef = useRef(isActive)
@@ -1938,6 +1966,19 @@ const ChatViewInner = memo(function ChatViewInner({
   const isInitializingScrollRef = useRef(false) // Flag to ignore scroll events during scroll initialization (content loading)
   const hasUnapprovedPlanRef = useRef(false) // Track unapproved plan state for scroll initialization
   const chatContainerRef = useRef<HTMLElement | null>(null)
+  const virtuosoRef = useRef<VirtuosoHandle | null>(null)
+  const messageIdToRowIndexRef = useRef<Map<string, number>>(new Map())
+  const scrollButtonSetVisibleRef = useRef<((v: boolean) => void) | null>(null)
+
+  const handleAtBottomChange = useCallback((atBottom: boolean) => {
+    shouldAutoScrollRef.current = atBottom
+    scrollButtonSetVisibleRef.current?.(!atBottom)
+  }, [])
+
+  const virtuosoFollowOutput = useCallback((isAtBottom: boolean) => {
+    if (!shouldAutoScrollRef.current) return false
+    return isAtBottom ? "auto" : false
+  }, [])
 
   // Cleanup isAutoScrollingRef on unmount to prevent stuck state
   useEffect(() => {
@@ -1992,10 +2033,9 @@ const ChatViewInner = memo(function ChatViewInner({
   const isAtBottom = useCallback(() => {
     const container = chatContainerRef.current
     if (!container) return true
-    const threshold = 50 // pixels from bottom
     return (
       container.scrollHeight - container.scrollTop - container.clientHeight <=
-      threshold
+      VIRTUOSO_FOLLOW_BOTTOM_THRESHOLD_PX
     )
   }, [])
 
@@ -2036,6 +2076,16 @@ const ChatViewInner = memo(function ChatViewInner({
 
   // Scroll to bottom handler with ease-in-out animation
   const scrollToBottom = useCallback(() => {
+    if (useVirtuosoChat) {
+      shouldAutoScrollRef.current = true
+      virtuosoRef.current?.scrollToIndex({
+        index: "LAST",
+        align: "end",
+        behavior: "smooth",
+      })
+      return
+    }
+
     const container = chatContainerRef.current
     if (!container) return
 
@@ -2170,7 +2220,11 @@ const ChatViewInner = memo(function ChatViewInner({
       // If the component remounts with the same subChatId, the sync will repopulate the atoms
       // If it truly unmounts, the timeout will clear the caches
       const timeoutId = setTimeout(() => {
-        clearSubChatCaches(currentSubChatId)
+        // Only clear when tab is no longer logically alive.
+        const { openSubChatIds } = useAgentSubChatStore.getState()
+        if (!openSubChatIds.includes(currentSubChatId)) {
+          clearSubChatCaches(currentSubChatId)
+        }
       }, 100)
 
       // Store the timeout so it can be cancelled if the component remounts
@@ -2181,7 +2235,7 @@ const ChatViewInner = memo(function ChatViewInner({
   }, [subChatId])
 
   // Cancel pending cleanup if we remount with the same subChatId
-  useEffect(() => {
+  useLayoutEffect(() => {
     const pendingCleanups = (window as any).__pendingCacheCleanups as Map<string, number> | undefined
     if (pendingCleanups?.has(subChatId)) {
       clearTimeout(pendingCleanups.get(subChatId))
@@ -2240,6 +2294,7 @@ const ChatViewInner = memo(function ChatViewInner({
     removePastedText,
     clearPastedTexts,
     pastedTextsRef,
+    setPastedTextsFromDraft,
   } = usePastedTextFiles(subChatId)
 
   // File contents cache - stores content for file mentions (keyed by mentionId)
@@ -2357,6 +2412,26 @@ const ChatViewInner = memo(function ChatViewInner({
   // Ref for isStreaming to use in callbacks/effects that need fresh value
   const isStreamingRef = useRef(isStreaming)
   isStreamingRef.current = isStreaming
+
+  // Map messageId -> virtualized row index (based on user message groups)
+  useEffect(() => {
+    const map = new Map<string, number>()
+    let currentRowIndex = -1
+
+    for (const msg of messages) {
+      if (msg.role === "user") {
+        currentRowIndex += 1
+        map.set(msg.id, currentRowIndex)
+        continue
+      }
+
+      if (currentRowIndex >= 0) {
+        map.set(msg.id, currentRowIndex)
+      }
+    }
+
+    messageIdToRowIndexRef.current = map
+  }, [messages])
 
   // Track compacting status from SDK
   const compactingSubChats = useAtomValue(compactingSubChatsAtom)
@@ -2491,20 +2566,25 @@ const ChatViewInner = memo(function ChatViewInner({
   const [pendingPrMessage, setPendingPrMessage] = useAtom(pendingPrMessageAtom)
 
   useEffect(() => {
-    if (pendingPrMessage && !isStreaming && isActive) {
+    if (pendingPrMessage?.subChatId === subChatId && !isStreaming && isActive && !isSplitPane) {
       // Clear the pending message immediately to prevent double-sending
       setPendingPrMessage(null)
 
       // Send the message to Claude
       sendMessage({
         role: "user",
-        parts: [{ type: "text", text: pendingPrMessage }],
+        parts: [{ type: "text", text: pendingPrMessage.message }],
       })
 
       // Reset creating PR state after message is sent
       setIsCreatingPr(false)
+
+      // Ensure the target sub-chat is focused after sending
+      const store = useAgentSubChatStore.getState()
+      store.addToOpenSubChats(subChatId)
+      store.setActiveSubChat(subChatId)
     }
-  }, [pendingPrMessage, isStreaming, isActive, sendMessage, setPendingPrMessage])
+  }, [pendingPrMessage, isStreaming, isActive, isSplitPane, sendMessage, setPendingPrMessage, setIsCreatingPr, subChatId])
 
   // Watch for pending Review message and send it
   const [pendingReviewMessage, setPendingReviewMessage] = useAtom(
@@ -2512,7 +2592,7 @@ const ChatViewInner = memo(function ChatViewInner({
   )
 
   useEffect(() => {
-    if (pendingReviewMessage && !isStreaming && isActive) {
+    if (pendingReviewMessage && !isStreaming && isActive && !isSplitPane) {
       // Clear the pending message immediately to prevent double-sending
       setPendingReviewMessage(null)
 
@@ -2522,7 +2602,7 @@ const ChatViewInner = memo(function ChatViewInner({
         parts: [{ type: "text", text: pendingReviewMessage }],
       })
     }
-  }, [pendingReviewMessage, isStreaming, isActive, sendMessage, setPendingReviewMessage])
+  }, [pendingReviewMessage, isStreaming, isActive, isSplitPane, sendMessage, setPendingReviewMessage])
 
   // Watch for pending conflict resolution message and send it
   const [pendingConflictMessage, setPendingConflictMessage] = useAtom(
@@ -2530,7 +2610,7 @@ const ChatViewInner = memo(function ChatViewInner({
   )
 
   useEffect(() => {
-    if (pendingConflictMessage && !isStreaming && isActive) {
+    if (pendingConflictMessage && !isStreaming && isActive && !isSplitPane) {
       // Clear the pending message immediately to prevent double-sending
       setPendingConflictMessage(null)
 
@@ -2540,7 +2620,7 @@ const ChatViewInner = memo(function ChatViewInner({
         parts: [{ type: "text", text: pendingConflictMessage }],
       })
     }
-  }, [pendingConflictMessage, isStreaming, isActive, sendMessage, setPendingConflictMessage])
+  }, [pendingConflictMessage, isStreaming, isActive, isSplitPane, sendMessage, setPendingConflictMessage])
 
   // Handle pending "Build plan" from sidebar (atom - effect is defined after handleApprovePlan)
   const [pendingBuildPlanSubChatId, setPendingBuildPlanSubChatId] = useAtom(
@@ -2573,20 +2653,41 @@ const ChatViewInner = memo(function ChatViewInner({
     [messages],
   )
 
-  // Pre-compute token data for ChatInputArea to avoid passing unstable messages array
-  // This prevents ChatInputArea from re-rendering on every streaming chunk
+  // Pre-compute token data for ChatInputArea to avoid passing unstable messages array.
+  // Context usage follows Claude SDK semantics: use the latest assistant turn's
+  // context size (input + cache), not cumulative sums across historical turns.
   const messageTokenData = useMemo(() => {
-    let totalInputTokens = 0
-    let totalOutputTokens = 0
-    let totalCostUsd = 0
-    for (const msg of messages) {
-      if (msg.metadata) {
-        totalInputTokens += msg.metadata.inputTokens || 0
-        totalOutputTokens += msg.metadata.outputTokens || 0
-        totalCostUsd += msg.metadata.totalCostUsd || 0
-      }
+    const lastAssistantWithMetadata = [...messages]
+      .reverse()
+      .find((msg) => msg.role === "assistant" && !!msg.metadata)
+
+    const metadata = lastAssistantWithMetadata?.metadata as
+      | {
+          inputTokens?: number
+          outputTokens?: number
+          totalCostUsd?: number
+          cacheReadInputTokens?: number
+          cacheCreationInputTokens?: number
+        }
+      | undefined
+
+    const cacheReadInputTokens = metadata?.cacheReadInputTokens || 0
+    const cacheCreationInputTokens = metadata?.cacheCreationInputTokens || 0
+
+    const totalInputTokens =
+      (metadata?.inputTokens || 0) + cacheReadInputTokens + cacheCreationInputTokens
+    const totalOutputTokens = metadata?.outputTokens || 0
+    const totalCostUsd = metadata?.totalCostUsd || 0
+
+    // Keep this tied to rendered messages for memo comparator stability.
+    const messageCount = messages.length
+
+    return {
+      totalInputTokens,
+      totalOutputTokens,
+      totalCostUsd,
+      messageCount,
     }
-    return { totalInputTokens, totalOutputTokens, totalCostUsd, messageCount: messages.length }
   }, [messages])
 
   // Track previous streaming state to detect stream stop
@@ -2990,6 +3091,14 @@ const ChatViewInner = memo(function ChatViewInner({
     // Only check after streaming ends
     if (isStreaming) return
 
+    // Don't run until agentChat has loaded so we know the real existingPrUrl
+    if (existingPrUrl === undefined) return
+
+    // Sync ref when existingPrUrl loads (prevents re-detection on remount)
+    if (existingPrUrl && !detectedPrUrlRef.current) {
+      detectedPrUrlRef.current = existingPrUrl
+    }
+
     // Look through messages for PR URLs
     for (const msg of messages) {
       if (msg.role !== "assistant") continue
@@ -3024,7 +3133,7 @@ const ChatViewInner = memo(function ChatViewInner({
         break // Only process first PR URL found
       }
     }
-  }, [messages, isStreaming, parentChatId])
+  }, [messages, isStreaming, parentChatId, existingPrUrl])
 
   // Track plan Edit completions to trigger sidebar refetch
   const triggerPlanEditRefetch = useSetAtom(
@@ -3061,12 +3170,14 @@ const ChatViewInner = memo(function ChatViewInner({
     subChatId,
     isStreaming,
     parentChatId,
+    projectPath,
   )
 
-  // Rollback handler - truncates messages to the clicked assistant message and restores git state
-  // The SDK UUID from the last assistant message will be used for resumeSessionAt on next send
+  // Rollback handler - triggered from user message bubble
+  // Finds the last assistant message BEFORE this user message, rolls back to it,
+  // and inserts the user message text into the input for easy re-sending
   const handleRollback = useCallback(
-    async (assistantMsg: (typeof messages)[0]) => {
+    async (userMsg: (typeof messages)[0]) => {
       if (isRollingBack) {
         toast.error("Rollback already in progress")
         return
@@ -3076,11 +3187,128 @@ const ChatViewInner = memo(function ChatViewInner({
         return
       }
 
-      const sdkUuid = (assistantMsg.metadata as any)?.sdkMessageUuid
-      if (!sdkUuid) {
-        toast.error("Cannot rollback: message has no SDK UUID")
+      // Find the index of this user message
+      const userMsgIndex = messages.findIndex((m) => m.id === userMsg.id)
+      if (userMsgIndex === -1) {
+        toast.error("Cannot rollback: message not found")
         return
       }
+
+      const sdkUuid = findRollbackTargetSdkUuidForUserIndex(
+        userMsgIndex,
+        messages.length,
+        (index) => messages[index] as any,
+      )
+
+      if (!sdkUuid) {
+        toast.error("Cannot rollback: this turn is not rollbackable")
+        return
+      }
+
+      // Extract raw text from user message (includes mention tokens)
+      const rawText = userMsg.parts
+        ?.filter((p: any) => p.type === "text")
+        .map((p: any) => p.text)
+        .join("\n") || ""
+
+      // Parse mention tokens from text to restore text contexts, diff contexts, and pasted texts
+      const restoredTextContexts: SelectedTextContext[] = []
+      const restoredDiffTextContexts: DiffTextContext[] = []
+      const restoredPastedTexts: PastedTextFile[] = []
+      let cleanedText = rawText
+
+      const mentionRegex = /@\[([^\]]+)\]/g
+      let match: RegExpExecArray | null
+      const mentionsToRemove: string[] = []
+
+      while ((match = mentionRegex.exec(rawText)) !== null) {
+        const id = match[1]
+
+        if (id.startsWith("quote:")) {
+          const content = id.slice("quote:".length)
+          const sepIdx = content.indexOf(":")
+          if (sepIdx !== -1) {
+            const preview = content.slice(0, sepIdx)
+            const encoded = content.slice(sepIdx + 1)
+            let fullText = preview
+            try { fullText = base64ToUtf8(encoded) } catch { /* use preview */ }
+            restoredTextContexts.push({
+              id: `tc_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+              text: fullText,
+              sourceMessageId: "",
+              preview: createTextPreview(fullText),
+              createdAt: new Date(),
+            })
+          }
+          mentionsToRemove.push(match[0])
+        } else if (id.startsWith("diff:")) {
+          const content = id.slice("diff:".length)
+          const parts = content.split(":")
+          if (parts.length >= 3) {
+            const filePath = parts[0] || ""
+            const lineNumber = parseInt(parts[1] || "0", 10) || undefined
+            const preview = parts[2] || ""
+            const encoded = parts.slice(3).join(":")
+            let fullText = preview
+            try { if (encoded) fullText = base64ToUtf8(encoded) } catch { /* use preview */ }
+            restoredDiffTextContexts.push({
+              id: `dtc_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+              text: fullText,
+              filePath,
+              lineNumber,
+              preview: createTextPreview(fullText),
+              createdAt: new Date(),
+            })
+          }
+          mentionsToRemove.push(match[0])
+        } else if (id.startsWith("pasted:")) {
+          const content = id.slice("pasted:".length)
+          const pipeIdx = content.lastIndexOf("|")
+          if (pipeIdx !== -1) {
+            const beforePipe = content.slice(0, pipeIdx)
+            const filePath = content.slice(pipeIdx + 1)
+            const colonIdx = beforePipe.indexOf(":")
+            if (colonIdx !== -1) {
+              const size = parseInt(beforePipe.slice(0, colonIdx) || "0", 10)
+              const preview = beforePipe.slice(colonIdx + 1)
+              restoredPastedTexts.push({
+                id: `pasted_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+                filePath,
+                filename: filePath.split("/").pop() || "pasted.txt",
+                size,
+                preview,
+                createdAt: new Date(),
+              })
+            }
+          }
+          mentionsToRemove.push(match[0])
+        }
+      }
+
+      // Remove mention tokens from text to get clean user text
+      for (const mentionStr of mentionsToRemove) {
+        cleanedText = cleanedText.replace(mentionStr, "")
+      }
+      cleanedText = cleanedText
+        .split("\n")
+        .map((line: string) => line.trim())
+        .join("\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim()
+
+      // Extract images from user message for restoring into input
+      const userMsgImages: UploadedImage[] = (userMsg.parts || [])
+        .filter((p: any) => p.type === "data-image" && p.data)
+        .map((p: any) => ({
+          id: crypto.randomUUID(),
+          filename: p.data.filename || "image",
+          url: p.data.url || (p.data.base64Data && p.data.mediaType
+            ? `data:${p.data.mediaType};base64,${p.data.base64Data}`
+            : ""),
+          base64Data: p.data.base64Data,
+          mediaType: p.data.mediaType,
+          isLoading: false,
+        }))
 
       setIsRollingBack(true)
 
@@ -3101,6 +3329,24 @@ const ChatViewInner = memo(function ChatViewInner({
         setMessages(result.messages)
         recomputeChangedFiles(result.messages)
         refreshDiff?.()
+
+        // Restore all user message content into input
+        if (cleanedText) {
+          editorRef.current?.setValue(cleanedText)
+        }
+        if (userMsgImages.length > 0) {
+          setImagesFromDraft(userMsgImages)
+        }
+        if (restoredTextContexts.length > 0) {
+          setTextContextsFromDraft(restoredTextContexts)
+        }
+        if (restoredDiffTextContexts.length > 0) {
+          setDiffTextContextsFromDraft(restoredDiffTextContexts)
+        }
+        if (restoredPastedTexts.length > 0) {
+          setPastedTextsFromDraft(restoredPastedTexts)
+        }
+        editorRef.current?.focus()
       } catch (error) {
         console.error("[handleRollback] Error:", error)
         toast.error("Failed to rollback")
@@ -3111,20 +3357,19 @@ const ChatViewInner = memo(function ChatViewInner({
     [
       isRollingBack,
       isStreaming,
+      messages,
       setMessages,
       subChatId,
       recomputeChangedFiles,
       refreshDiff,
+      setImagesFromDraft,
+      setTextContextsFromDraft,
+      setDiffTextContextsFromDraft,
+      setPastedTextsFromDraft,
     ],
   )
 
-  // Expose rollback handler/state via atoms for message action bar
-  const setRollbackHandler = useSetAtom(rollbackHandlerAtom)
-  useEffect(() => {
-    setRollbackHandler(() => handleRollback)
-    return () => setRollbackHandler(null)
-  }, [handleRollback, setRollbackHandler])
-
+  // Sync local isRollingBack state to global atom (prevents multiple rollbacks across chats)
   const setIsRollingBackAtom = useSetAtom(isRollingBackAtom)
   useEffect(() => {
     setIsRollingBackAtom(isRollingBack)
@@ -3274,6 +3519,13 @@ const ChatViewInner = memo(function ChatViewInner({
     scrollInitializedRef.current = false
     isInitializingScrollRef.current = true
 
+    if (useVirtuosoChat) {
+      // Virtuoso owns scrolling; just mark as initialized
+      scrollInitializedRef.current = true
+      isInitializingScrollRef.current = false
+      return
+    }
+
     // IMMEDIATE scroll to bottom - no waiting
     container.scrollTop = container.scrollHeight
     shouldAutoScrollRef.current = true
@@ -3317,9 +3569,18 @@ const ChatViewInner = memo(function ChatViewInner({
     const container = chatContainerRef.current
     if (!container) return
 
+    const handleWheel = (event: WheelEvent) => {
+      if (!isActiveRef.current) return
+      if (event.deltaY < 0) {
+        shouldAutoScrollRef.current = false
+      }
+    }
+
     container.addEventListener("scroll", handleScroll, { passive: true })
+    container.addEventListener("wheel", handleWheel, { passive: true })
     return () => {
       container.removeEventListener("scroll", handleScroll)
+      container.removeEventListener("wheel", handleWheel)
     }
   }, [handleScroll])
 
@@ -3333,6 +3594,17 @@ const ChatViewInner = memo(function ChatViewInner({
 
     // Auto-scroll during streaming if user hasn't scrolled up
     if (shouldAutoScrollRef.current && status === "streaming") {
+      if (useVirtuosoChat) {
+        requestAnimationFrame(() => {
+          virtuosoRef.current?.scrollToIndex({
+            index: "LAST",
+            align: "end",
+            behavior: "auto",
+          })
+        })
+        return
+      }
+
       const container = chatContainerRef.current
       if (container) {
         // Always scroll during streaming if auto-scroll is enabled
@@ -3347,6 +3619,22 @@ const ChatViewInner = memo(function ChatViewInner({
       }
     }
   }, [isActive, messages, status, subChatId])
+
+  // Scroll to bottom when QueueProcessor auto-sends a queued message.
+  // QueueProcessor runs globally and can't access scroll refs, so it
+  // signals via a store trigger that we subscribe to here.
+  useEffect(() => {
+    const unsub = useMessageQueueStore.subscribe(
+      (state) => state.queueSentTriggers[subChatId] || 0,
+      (trigger) => {
+        if (trigger === 0) return
+        if (!isActiveRef.current) return
+        shouldAutoScrollRef.current = true
+        scrollToBottom()
+      },
+    )
+    return unsub
+  }, [subChatId, scrollToBottom])
 
   // Auto-focus input when switching to this chat (any sub-chat change)
   // Skip on mobile to prevent keyboard from opening automatically
@@ -3415,13 +3703,17 @@ const ChatViewInner = memo(function ChatViewInner({
         .filter((f) => !f.isLoading && f.url)
         .map(toQueuedFile)
       const queuedTextContexts = currentTextContexts.map(toQueuedTextContext)
+      const queuedDiffTextContexts = diffTextContextsRef.current.map(toQueuedDiffTextContext)
+      const queuedPastedTexts = currentPastedTexts.map(toQueuedPastedText)
 
       const item = createQueueItem(
         generateQueueId(),
         inputValue.trim(),
         queuedImages.length > 0 ? queuedImages : undefined,
         queuedFiles.length > 0 ? queuedFiles : undefined,
-        queuedTextContexts.length > 0 ? queuedTextContexts : undefined
+        queuedTextContexts.length > 0 ? queuedTextContexts : undefined,
+        queuedDiffTextContexts.length > 0 ? queuedDiffTextContexts : undefined,
+        queuedPastedTexts.length > 0 ? queuedPastedTexts : undefined
       )
       addToQueue(subChatId, item)
 
@@ -3432,6 +3724,8 @@ const ChatViewInner = memo(function ChatViewInner({
       }
       clearAll()
       clearTextContexts()
+      clearDiffTextContexts()
+      clearPastedTexts()
       return
     }
 
@@ -3691,6 +3985,15 @@ const ChatViewInner = memo(function ChatViewInner({
           return `@[${MENTION_PREFIXES.DIFF}${dtc.filePath}:${lineNum}:${preview}:${encodedText}]`
         })
         mentionPrefix += diffMentions.join(" ") + " "
+      }
+
+      // Add pasted text contexts as mention tokens
+      if (item.pastedTexts && item.pastedTexts.length > 0) {
+        const pastedTextMentions = item.pastedTexts.map((pt) => {
+          const sanitizedPreview = pt.preview.replace(/[:\[\]|]/g, "")
+          return `@[${MENTION_PREFIXES.PASTED}${pt.size}:${sanitizedPreview}|${pt.filePath}]`
+        })
+        mentionPrefix += pastedTextMentions.join(" ") + " "
       }
 
       if (item.message || mentionPrefix) {
@@ -3994,8 +4297,31 @@ const ChatViewInner = memo(function ChatViewInner({
   useLayoutEffect(() => {
     // Skip syncing for inactive tabs - they shouldn't update global atoms
     if (!isActive) return
+    // DEBUG: track layout effect timing
+    const switchStart = (globalThis as any).__switchStart
+    if (switchStart) {
+      fetch('http://localhost:7799/log',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tag:'switch',msg:'useLayoutEffect:syncMessages',data:{subChatId:subChatId.slice(-8),msgCount:messages.length,sinceSwitch:+((performance.now()-switchStart)).toFixed(2)},ts:Date.now()})}).catch(()=>{})
+    }
     syncMessages({ messages, status, subChatId })
+    // DEBUG: after sync
+    if (switchStart) {
+      fetch('http://localhost:7799/log',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tag:'switch',msg:'useLayoutEffect:afterSync',data:{subChatId:subChatId.slice(-8),sinceSwitch:+((performance.now()-switchStart)).toFixed(2)},ts:Date.now()})}).catch(()=>{})
+    }
   }, [messages, status, subChatId, syncMessages, isActive])
+
+  // DEBUG: measure time to first paint after subchat switch
+  useEffect(() => {
+    if (!isActive) return
+    const switchStart = (globalThis as any).__switchStart
+    if (!switchStart) return
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const paintTime = performance.now()
+        fetch('http://localhost:7799/log',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tag:'switch',msg:'firstPaint',data:{subChatId:subChatId.slice(-8),sinceSwitch:+((paintTime-switchStart)).toFixed(2)},ts:Date.now()})}).catch(()=>{})
+        ;(globalThis as any).__switchStart = null // clear to stop logging
+      })
+    })
+  }, [isActive, subChatId])
 
   // Sync status to global streaming status store for queue processing
   const setStreamingStatus = useStreamingStatusStore((s) => s.setStatus)
@@ -4016,6 +4342,40 @@ const ChatViewInner = memo(function ChatViewInner({
     // Increment lock to cancel any pending scroll operations
     const currentLock = ++searchScrollLockRef.current
 
+    const tryScrollToMatchInDom = () => {
+      // First try to find the highlight mark
+      let targetElement: Element | null = container.querySelector(".search-highlight-current")
+
+      // If no highlight mark, find the message element with matching data attributes
+      if (!targetElement) {
+        const selector = `[data-message-id="${currentSearchMatch.messageId}"][data-part-index="${currentSearchMatch.partIndex}"]`
+        targetElement = container.querySelector(selector)
+      }
+
+      if (targetElement) {
+        // Check if this is inside a sticky user message container
+        const stickyParent = targetElement.closest("[data-user-message-id]")
+        if (stickyParent) {
+          const messageGroupWrapper = stickyParent.parentElement
+          if (messageGroupWrapper) {
+            messageGroupWrapper.scrollIntoView({
+              behavior: "smooth",
+              block: "start",
+            })
+            return true
+          }
+        }
+
+        targetElement.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        })
+        return true
+      }
+
+      return false
+    }
+
     // Use double requestAnimationFrame + small delay to ensure DOM has updated with new highlights
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
@@ -4023,33 +4383,26 @@ const ChatViewInner = memo(function ChatViewInner({
           // Check if this scroll operation is still valid (not superseded by newer one)
           if (searchScrollLockRef.current !== currentLock) return
 
-          // First try to find the highlight mark
-          let targetElement: Element | null = container.querySelector(".search-highlight-current")
+          if (tryScrollToMatchInDom()) return
 
-          // If no highlight mark, find the message element with matching data attributes
-          if (!targetElement) {
-            const selector = `[data-message-id="${currentSearchMatch.messageId}"][data-part-index="${currentSearchMatch.partIndex}"]`
-            targetElement = container.querySelector(selector)
-          }
+          if (useVirtuosoChat) {
+            const rowIndex = messageIdToRowIndexRef.current.get(currentSearchMatch.messageId)
+            if (rowIndex !== undefined) {
+              virtuosoRef.current?.scrollToIndex({
+                index: rowIndex,
+                align: "center",
+                behavior: "smooth",
+              })
 
-          if (targetElement) {
-            // Check if this is inside a sticky user message container
-            const stickyParent = targetElement.closest("[data-user-message-id]")
-            if (stickyParent) {
-              const messageGroupWrapper = stickyParent.parentElement
-              if (messageGroupWrapper) {
-                messageGroupWrapper.scrollIntoView({
-                  behavior: "smooth",
-                  block: "start",
+              requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                  setTimeout(() => {
+                    if (searchScrollLockRef.current !== currentLock) return
+                    tryScrollToMatchInDom()
+                  }, 50)
                 })
-                return
-              }
+              })
             }
-
-            targetElement.scrollIntoView({
-              behavior: "smooth",
-              block: "center",
-            })
           }
         }, 50)
       })
@@ -4058,16 +4411,31 @@ const ChatViewInner = memo(function ChatViewInner({
 
   // Calculate top offset for search bar based on sub-chat selector
   const searchBarTopOffset = isSubChatsSidebarOpen ? "52px" : undefined
+  const shouldShowStatusCard =
+    isStreaming || isCompacting || changedFilesForSubChat.length > 0
+  const shouldShowStackedCards =
+    !displayQuestions && (queue.length > 0 || shouldShowStatusCard)
+
+  const MessageGroupWrapper = useCallback(
+    ({ children, isLastGroup }: { children: React.ReactNode; isLastGroup?: boolean }) => (
+      <MessageGroup isLastGroup={isLastGroup}>
+        {children}
+      </MessageGroup>
+    ),
+    []
+  )
 
   return (
     <SearchHighlightProvider>
       <div className="flex flex-col flex-1 min-h-0 relative">
-        {/* Text selection popover for adding text to context */}
-        <TextSelectionPopover
-          onAddToContext={addTextContext}
-          onQuickComment={handleQuickComment}
-          onFocusInput={handleFocusInput}
-        />
+        {/* Text selection popover for adding text to context - only render for active tab to avoid keep-alive portal collision */}
+        {isActive && (
+          <TextSelectionPopover
+            onAddToContext={addTextContext}
+            onQuickComment={handleQuickComment}
+            onFocusInput={handleFocusInput}
+          />
+        )}
 
         {/* Quick comment input */}
         {quickCommentState && (
@@ -4113,11 +4481,20 @@ const ChatViewInner = memo(function ChatViewInner({
 
           chatContainerRef.current = el
 
-          // Setup ResizeObserver for --chat-container-height CSS variable
+          // Setup ResizeObserver for --chat-container-height/width CSS variables
+          // Variables are set on both the element itself and the parent (relative wrapper)
+          // so siblings like ScrollToBottomButton can also access them
           if (el) {
+            const parent = el.parentElement
             const observer = new ResizeObserver((entries) => {
-              const height = entries[0]?.contentRect.height ?? 0
+              const { height, width } = entries[0]?.contentRect ?? {
+                height: 0,
+                width: 0,
+              }
               el.style.setProperty("--chat-container-height", `${height}px`)
+              el.style.setProperty("--chat-container-width", `${width}px`)
+              parent?.style.setProperty("--chat-container-height", `${height}px`)
+              parent?.style.setProperty("--chat-container-width", `${width}px`)
             })
             observer.observe(el)
             chatContainerObserverRef.current = observer
@@ -4127,32 +4504,29 @@ const ChatViewInner = memo(function ChatViewInner({
         tabIndex={-1}
         data-chat-container
       >
-        <div
-          className="px-2 max-w-2xl mx-auto -mb-4 space-y-4"
-          style={{
-            paddingBottom: "32px",
-          }}
-        >
-          <div>
-            {/* ISOLATED: Messages rendered via Jotai atom subscription
-                Each component subscribes to specific atoms and only re-renders when those change
-                KEY: Force remount on subChatId change to ensure fresh atom reads after syncMessages */}
-            <IsolatedMessagesSection
-              key={subChatId}
-              subChatId={subChatId}
-              chatId={parentChatId}
-              isMobile={isMobile}
-              sandboxSetupStatus={sandboxSetupStatus}
-              stickyTopClass={stickyTopClass}
-              sandboxSetupError={sandboxSetupError}
-              onRetrySetup={onRetrySetup}
-              UserBubbleComponent={AgentUserMessageBubble}
-              ToolCallComponent={AgentToolCall}
-              MessageGroupWrapper={MessageGroup}
-              toolRegistry={AgentToolRegistry}
-            />
-          </div>
-        </div>
+        {/* ISOLATED: Messages rendered via Jotai atom subscription
+            Each component subscribes to specific atoms and only re-renders when those change
+            KEY: Force remount on subChatId change to ensure fresh atom reads after syncMessages */}
+        <IsolatedMessagesSection
+          key={subChatId}
+          subChatId={subChatId}
+          chatId={parentChatId}
+          isMobile={isMobile}
+          isSplitPane={isSplitPane}
+          sandboxSetupStatus={sandboxSetupStatus}
+          stickyTopClass={stickyTopClass}
+          sandboxSetupError={sandboxSetupError}
+          onRetrySetup={onRetrySetup}
+          UserBubbleComponent={AgentUserMessageBubble}
+          ToolCallComponent={AgentToolCall}
+          MessageGroupWrapper={MessageGroupWrapper}
+          toolRegistry={AgentToolRegistry}
+          onRollback={handleRollback}
+          scrollParentRef={chatContainerRef}
+          virtuosoRef={virtuosoRef}
+          followOutput={useVirtuosoChat ? virtuosoFollowOutput : false}
+          onAtBottomStateChange={handleAtBottomChange}
+        />
       </div>
 
       {/* User questions panel - shows for both live (pending) and expired (timed out) questions */}
@@ -4171,8 +4545,7 @@ const ChatViewInner = memo(function ChatViewInner({
       )}
 
       {/* Stacked cards container - queue + status */}
-      {!displayQuestions &&
-        (queue.length > 0 || changedFilesForSubChat.length > 0) && (
+      {shouldShowStackedCards && (
           <div className="px-2 -mb-6 relative z-10">
             <div className="w-full max-w-2xl mx-auto px-2">
               {/* Queue indicator card - top card */}
@@ -4182,11 +4555,11 @@ const ChatViewInner = memo(function ChatViewInner({
                   onRemoveItem={handleRemoveFromQueue}
                   onSendNow={handleSendFromQueue}
                   isStreaming={isStreaming}
-                  hasStatusCardBelow={changedFilesForSubChat.length > 0}
+                  hasStatusCardBelow={shouldShowStatusCard}
                 />
               )}
-              {/* Status card - bottom card, only when there are changed files */}
-              {changedFilesForSubChat.length > 0 && (
+              {/* Status card - bottom card */}
+              {shouldShowStatusCard && (
                 <SubChatStatusCard
                   chatId={parentChatId}
                   subChatId={subChatId}
@@ -4211,6 +4584,7 @@ const ChatViewInner = memo(function ChatViewInner({
         onStop={handleStop}
         onCompact={handleCompact}
         onCreateNewSubChat={onCreateNewSubChat}
+        onModeChange={handleModeChange}
         isStreaming={isStreaming}
         isCompacting={isCompacting}
         images={images}
@@ -4247,9 +4621,10 @@ const ChatViewInner = memo(function ChatViewInner({
         <ScrollToBottomButton
           containerRef={chatContainerRef}
           onScrollToBottom={scrollToBottom}
-          hasStackedCards={!displayQuestions && (queue.length > 0 || changedFilesForSubChat.length > 0)}
+          hasStackedCards={shouldShowStackedCards}
           subChatId={subChatId}
           isActive={isActive}
+          setVisibleRef={scrollButtonSetVisibleRef}
         />
       </div>
     </SearchHighlightProvider>
@@ -4268,6 +4643,7 @@ export function ChatView({
   onOpenPreview,
   onOpenDiff,
   onOpenTerminal,
+  hideHeader = false,
 }: {
   chatId: string
   isSidebarOpen: boolean
@@ -4279,6 +4655,7 @@ export function ChatView({
   onOpenPreview?: () => void
   onOpenDiff?: () => void
   onOpenTerminal?: () => void
+  hideHeader?: boolean
 }) {
   const [selectedTeamId] = useAtom(selectedTeamIdAtom)
   const [selectedModelId] = useAtom(lastSelectedModelIdAtom)
@@ -4335,11 +4712,19 @@ export function ChatView({
     [activeSubChatIdForPlan],
   )
   const [isPlanSidebarOpen, setIsPlanSidebarOpen] = useAtom(planSidebarAtom)
+  const [planDisplayMode, setPlanDisplayMode] = useAtom(planDisplayModeAtom)
   const currentPlanPathAtom = useMemo(
     () => currentPlanPathAtomFamily(activeSubChatIdForPlan || ""),
     [activeSubChatIdForPlan],
   )
   const [currentPlanPath, setCurrentPlanPath] = useAtom(currentPlanPathAtom)
+
+  // Effective plan display mode: force center-peek in split view, otherwise use user preference
+  // Computed early because mutual exclusion logic needs it
+  const isSplitViewForPlan = useAgentSubChatStore(
+    useShallow((state) => state.splitPaneIds.length >= 2 && state.splitPaneIds.includes(state.activeSubChatId))
+  )
+  const effectivePlanDisplayMode: PlanDisplayMode = isSplitViewForPlan ? "center-peek" : planDisplayMode
 
   // File viewer sidebar state - per-chat open file path
   const fileViewerAtom = useMemo(
@@ -4361,16 +4746,16 @@ export function ChatView({
   const toggleTerminalHotkey = useResolvedHotkeyDisplay("toggle-terminal")
 
   // Close plan sidebar when switching to a sub-chat that has no plan
+  // Skip in split view — clicking between panes shouldn't close the plan dialog
   const prevSubChatIdRef = useRef(activeSubChatIdForPlan)
   useEffect(() => {
     if (prevSubChatIdRef.current !== activeSubChatIdForPlan) {
-      // Sub-chat changed - if new one has no plan path, close sidebar
-      if (!currentPlanPath) {
+      if (!currentPlanPath && !isSplitViewForPlan) {
         setIsPlanSidebarOpen(false)
       }
       prevSubChatIdRef.current = activeSubChatIdForPlan
     }
-  }, [activeSubChatIdForPlan, currentPlanPath, setIsPlanSidebarOpen])
+  }, [activeSubChatIdForPlan, currentPlanPath, isSplitViewForPlan, setIsPlanSidebarOpen])
   const setPendingBuildPlanSubChatId = useSetAtom(pendingBuildPlanSubChatIdAtom)
 
   // Read plan edit refetch trigger from atom (set by ChatViewInner when Edit completes)
@@ -4438,14 +4823,16 @@ export function ChatView({
   // Track previous states to detect opens/closes
   const prevSidebarStatesRef = useRef({
     details: isDetailsSidebarOpen,
-    plan: isPlanSidebarOpen && !!currentPlanPath,
+    plan: isPlanSidebarOpen && !!currentPlanPath && effectivePlanDisplayMode === "side-peek",
     terminal: isTerminalSidebarOpen,
   })
 
   useEffect(() => {
     const prev = prevSidebarStatesRef.current
     const auto = autoClosedStateRef.current
-    const isPlanOpen = isPlanSidebarOpen && !!currentPlanPath
+    // Only treat plan as a physical sidebar conflict when in side-peek mode
+    // In center-peek (dialog) mode, plan floats above everything — no conflict
+    const isPlanOpen = isPlanSidebarOpen && !!currentPlanPath && effectivePlanDisplayMode === "side-peek"
 
     // Detect state changes
     const detailsJustOpened = isDetailsSidebarOpen && !prev.details
@@ -4510,6 +4897,7 @@ export function ChatView({
     isDetailsSidebarOpen,
     isPlanSidebarOpen,
     currentPlanPath,
+    effectivePlanDisplayMode,
     isTerminalSidebarOpen,
     terminalDisplayMode,
     setIsDetailsSidebarOpen,
@@ -4573,7 +4961,7 @@ export function ChatView({
   }, [diffDisplayMode])
 
   // Handle Diff + Details sidebar conflict (side-peek mode only)
-  // - If Diff opens in side-peek while Details is open: switch Diff to center-peek (dialog) mode
+  // - If Diff opens in side-peek while Details is open: close Details and remember
   // - If user manually switches Diff to side-peek while Details is open: close Details and remember
   // - If Details opens while Diff is in side-peek mode: close Diff and remember
   const prevDiffStateRef = useRef<{ isOpen: boolean; mode: string; detailsOpen: boolean }>({
@@ -4598,10 +4986,11 @@ export function ChatView({
         auto.diffClosedByDetails = true
         setIsDiffSidebarOpen(false)
       }
-      // Diff just opened in side-peek mode → switch to dialog (don't close Details)
+      // Diff just opened in side-peek mode → close Details and remember
       // Skip if we're restoring Diff after Details closed
       else if (!prev.isOpen && !isRestoringDiffRef.current) {
-        setDiffDisplayMode("center-peek")
+        auto.detailsClosedBy = "diff"
+        setIsDetailsSidebarOpen(false)
       }
       // User manually switched to side-peek while Diff was already open → close Details and remember
       else if (prev.isOpen && prev.mode !== "side-peek") {
@@ -4694,12 +5083,8 @@ export function ChatView({
     }
   }, [isDiffSidebarOpen, storedDiffSidebarWidth])
 
-  // Track changed files across all sub-chats for throttled diff refresh
+  // Track changed files across all sub-chats for filtering
   const subChatFiles = useAtomValue(subChatFilesAtom)
-  // Initialize to Date.now() to prevent double-fetch on mount
-  // (the "mount" effect already fetches, throttle should wait)
-  const lastDiffFetchTimeRef = useRef<number>(Date.now())
-  const DIFF_THROTTLE_MS = 2000 // Max 1 fetch per 2 seconds
 
   // Clear "unseen changes" when chat is opened
   useEffect(() => {
@@ -4719,14 +5104,22 @@ export function ChatView({
     openSubChatIds,
     pinnedSubChatIds,
     allSubChats,
+    splitPaneIds,
   } = useAgentSubChatStore(
     useShallow((state) => ({
       activeSubChatId: state.activeSubChatId,
       openSubChatIds: state.openSubChatIds,
       pinnedSubChatIds: state.pinnedSubChatIds,
       allSubChats: state.allSubChats,
+      splitPaneIds: state.splitPaneIds,
     }))
   )
+
+  // isSplitView alias using local splitPaneIds (for JSX rendering)
+  const isSplitView = splitPaneIds.length >= 2 && splitPaneIds.includes(activeSubChatId)
+  const handlePlanDisplayModeChange = useCallback((mode: PlanDisplayMode) => {
+    setPlanDisplayMode(mode)
+  }, [setPlanDisplayMode])
 
   // Clear sub-chat "unseen changes" indicator when sub-chat becomes active
   useEffect(() => {
@@ -4855,7 +5248,7 @@ export function ChatView({
   // Workspace isolation: limit mounted tabs to prevent memory growth
   // CRITICAL: Filter by workspace to prevent rendering sub-chats from other workspaces
   // Always render: active + pinned, then fill with recent up to limit
-  const MAX_MOUNTED_TABS = 5
+  const MAX_MOUNTED_TABS = Math.max(5, splitPaneIds.length + 2)
   const tabsToRender = useMemo(() => {
     if (!activeSubChatId) return []
 
@@ -4883,6 +5276,13 @@ export function ChatView({
     // Start with active (must always be mounted)
     const mustRender = new Set([activeSubChatId])
 
+    // Ensure all split panes are always mounted
+    for (const paneId of splitPaneIds) {
+      if (validSubChatIds.has(paneId)) {
+        mustRender.add(paneId)
+      }
+    }
+
     // Add pinned tabs (only valid ones)
     for (const id of validPinnedIds) {
       mustRender.add(id)
@@ -4907,8 +5307,14 @@ export function ChatView({
     if (!result.includes(activeSubChatId)) {
       result.unshift(activeSubChatId)
     }
+    // Also ensure split pane tabs are in the result
+    for (const paneId of splitPaneIds) {
+      if (validSubChatIds.has(paneId) && !result.includes(paneId)) {
+        result.push(paneId)
+      }
+    }
     return result
-  }, [activeSubChatId, pinnedSubChatIds, openSubChatIds, allSubChats, agentSubChats])
+  }, [activeSubChatId, splitPaneIds, pinnedSubChatIds, openSubChatIds, allSubChats, agentSubChats])
 
   // Get PR status when PR exists (for checking if it's open/merged/closed)
   const hasPrNumber = !!agentChat?.prNumber
@@ -5024,12 +5430,6 @@ export function ChatView({
   const sandboxUrl = sandboxId ? `https://3003-${sandboxId}.e2b.app` : null
   // Desktop uses worktreePath, web uses sandboxUrl
   const chatWorkingDir = worktreePath || sandboxUrl
-
-  // Listen for file changes from Claude Write/Edit tools and invalidate git status
-  useFileChangeListener(worktreePath)
-
-  // Subscribe to GitWatcher for real-time file system monitoring (chokidar on main process)
-  useGitWatcher(worktreePath)
 
   // Plugin MCP approval - disabled for now since official marketplace plugins
   // are trusted by default. Will re-enable when third-party plugin support is added.
@@ -5288,7 +5688,7 @@ export function ChatView({
     }
     fetchDiffStatsDebounceRef.current = setTimeout(() => {
       fetchDiffStats()
-    }, 500) // 500ms debounce to avoid spamming if multiple streams end
+    }, 2000) // 2s debounce to avoid spamming if multiple streams end
   }, [fetchDiffStats])
 
   // Ref to hold the latest fetchDiffStatsDebounced for use in onFinish callbacks
@@ -5311,38 +5711,48 @@ export function ChatView({
     }
   }, [isDiffSidebarOpen, fetchDiffStats])
 
-  // Calculate total file count across all sub-chats for change detection
-  const totalSubChatFileCount = useMemo(() => {
-    let count = 0
-    subChatFiles.forEach((files) => {
-      count += files.length
-    })
-    return count
-  }, [subChatFiles])
+  // Throttled diff refresh for filesystem events (file edits, git ops)
+  // Initialize to Date.now() to prevent double-fetch on mount
+  // (the "mount" effect already fetches, throttle should wait)
+  const lastDiffFetchTimeRef = useRef<number>(Date.now())
+  const DIFF_THROTTLE_MS = 2000 // Max 1 fetch per 2 seconds
+  const diffRefreshTimerRef = useRef<NodeJS.Timeout | null>(null)
 
-  // Throttled refetch when sub-chat files change (agent edits/writes files)
-  // This keeps the top-right diff sidebar in sync with the bottom "Generated X files" bar
-  useEffect(() => {
-    // Skip if no files tracked yet (initial state)
-    if (totalSubChatFileCount === 0) return
-
+  const scheduleDiffRefresh = useCallback(() => {
     const now = Date.now()
     const timeSinceLastFetch = now - lastDiffFetchTimeRef.current
 
     if (timeSinceLastFetch >= DIFF_THROTTLE_MS) {
-      // Enough time passed, fetch immediately
       lastDiffFetchTimeRef.current = now
       fetchDiffStats()
-    } else {
-      // Schedule fetch for when throttle window ends
-      const delay = DIFF_THROTTLE_MS - timeSinceLastFetch
-      const timer = setTimeout(() => {
-        lastDiffFetchTimeRef.current = Date.now()
-        fetchDiffStats()
-      }, delay)
-      return () => clearTimeout(timer)
+      return
     }
-  }, [totalSubChatFileCount, fetchDiffStats])
+
+    const delay = DIFF_THROTTLE_MS - timeSinceLastFetch
+    if (diffRefreshTimerRef.current) {
+      clearTimeout(diffRefreshTimerRef.current)
+    }
+    diffRefreshTimerRef.current = setTimeout(() => {
+      diffRefreshTimerRef.current = null
+      lastDiffFetchTimeRef.current = Date.now()
+      fetchDiffStats()
+    }, delay)
+  }, [fetchDiffStats])
+
+  useEffect(() => {
+    return () => {
+      if (diffRefreshTimerRef.current) {
+        clearTimeout(diffRefreshTimerRef.current)
+        diffRefreshTimerRef.current = null
+      }
+    }
+  }, [])
+
+  // Listen for file changes from Claude Write/Edit tools and refresh diff
+  useFileChangeListener(worktreePath, { onChange: scheduleDiffRefresh })
+
+  // Subscribe to GitWatcher for real-time file system monitoring (chokidar on main process)
+  useGitWatcher(worktreePath, { onChange: scheduleDiffRefresh, debounceMs: 200 })
 
   // Handle Create PR (Direct) - pushes branch and opens GitHub compare URL
   const handleCreatePrDirect = useCallback(async () => {
@@ -5370,6 +5780,18 @@ export function ChatView({
 
     setIsCreatingPr(true)
     try {
+      const activeSubChatId = useAgentSubChatStore.getState().activeSubChatId
+      if (!activeSubChatId) {
+        toast.error("No active chat available", { position: "top-center" })
+        setIsCreatingPr(false)
+        return
+      }
+
+      // Ensure the target sub-chat is focused before sending
+      const store = useAgentSubChatStore.getState()
+      store.addToOpenSubChats(activeSubChatId)
+      store.setActiveSubChat(activeSubChatId)
+
       // Get PR context from backend
       const context = await trpcClient.chats.getPrContext.query({ chatId })
       if (!context) {
@@ -5380,7 +5802,7 @@ export function ChatView({
 
       // Generate message and set it for ChatViewInner to send
       const message = generatePrMessage(context)
-      setPendingPrMessage(message)
+      setPendingPrMessage({ message, subChatId: activeSubChatId })
       // Don't reset isCreatingPr here - it will be reset after message is sent
     } catch (error) {
       toast.error(
@@ -5389,7 +5811,7 @@ export function ChatView({
       )
       setIsCreatingPr(false)
     }
-  }, [chatId, setPendingPrMessage])
+  }, [chatId, setPendingPrMessage, setIsCreatingPr])
 
   // Handle Commit to existing PR - sends a message to Claude to commit and push
   // selectedPaths parameter is optional - if provided, only those files will be mentioned
@@ -5402,6 +5824,18 @@ export function ChatView({
 
     try {
       setIsCommittingToPr(true)
+      const activeSubChatId = useAgentSubChatStore.getState().activeSubChatId
+      if (!activeSubChatId) {
+        toast.error("No active chat available", { position: "top-center" })
+        setIsCommittingToPr(false)
+        return
+      }
+
+      // Ensure the target sub-chat is focused before sending
+      const store = useAgentSubChatStore.getState()
+      store.addToOpenSubChats(activeSubChatId)
+      store.setActiveSubChat(activeSubChatId)
+
       const context = await trpcClient.chats.getPrContext.query({ chatId })
       if (!context) {
         toast.error("Could not get git context", { position: "top-center" })
@@ -5409,7 +5843,7 @@ export function ChatView({
       }
 
       const message = generateCommitToPrMessage(context)
-      setPendingPrMessage(message)
+      setPendingPrMessage({ message, subChatId: activeSubChatId })
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Failed to prepare commit request",
@@ -5418,7 +5852,7 @@ export function ChatView({
     } finally {
       setIsCommittingToPr(false)
     }
-  }, [chatId, setPendingPrMessage])
+  }, [chatId, setPendingPrMessage, setIsCommittingToPr])
 
   // Handle Review - sends a message to Claude to review the diff
   const setPendingReviewMessage = useSetAtom(pendingReviewMessageAtom)
@@ -5481,8 +5915,41 @@ Make sure to preserve all functionality from both branches when resolving confli
   // Fetch git status for sync counts (pushCount, pullCount, hasUpstream)
   const { data: gitStatus, refetch: refetchGitStatus, isLoading: isGitStatusLoading } = trpc.changes.getStatus.useQuery(
     { worktreePath: worktreePath || "" },
-    { enabled: !!worktreePath && isDiffSidebarOpen, staleTime: 30000 }
+    { enabled: !!worktreePath && (isDiffSidebarOpen || isDetailsSidebarOpen), staleTime: 30000 }
   )
+
+  const handleCommitChangesRefresh = useCallback(() => {
+    refetchGitStatus()
+    scheduleDiffRefresh()
+  }, [refetchGitStatus, scheduleDiffRefresh])
+
+  const {
+    commit: commitChanges,
+    isPending: isCommittingChanges,
+  } = useCommitActions({
+    worktreePath,
+    chatId,
+    onRefresh: handleCommitChangesRefresh,
+  })
+
+  const { push: pushBranch, isPending: isPushing } = usePushAction({
+    worktreePath,
+    hasUpstream: gitStatus?.hasUpstream ?? true,
+    onSuccess: handleCommitChangesRefresh,
+  })
+
+  const handleCommitChanges = useCallback((selectedPaths: string[]) => {
+    commitChanges({ filePaths: selectedPaths })
+  }, [commitChanges])
+
+  const handleCommitAndPush = useCallback(async (selectedPaths: string[]) => {
+    const didCommit = await commitChanges({ filePaths: selectedPaths })
+    if (didCommit) {
+      pushBranch()
+    }
+  }, [commitChanges, pushBranch])
+
+  const isCommittingCombined = isCommittingChanges || isPushing
 
   // Refetch git status and diff stats when window gains focus
   useEffect(() => {
@@ -5529,7 +5996,8 @@ Make sure to preserve all functionality from both branches when resolving confli
   // Stable callbacks for DiffSidebarHeader to prevent re-renders
   const handleRefreshGitStatus = useCallback(() => {
     refetchGitStatus()
-  }, [refetchGitStatus])
+    scheduleDiffRefresh()
+  }, [refetchGitStatus, scheduleDiffRefresh])
 
   const handleExpandAll = useCallback(() => {
     diffViewRef.current?.expandAll()
@@ -5795,10 +6263,13 @@ Make sure to preserve all functionality from both branches when resolving confli
                   // Ignore audio errors
                 }
               }
-
-              // Show native notification (desktop app, when window not focused)
-              notifyAgentComplete(agentChat?.name || "Agent")
             }
+          }
+
+          // Show native notification if not manually aborted
+          // (the hook handles focus/preference checks internally)
+          if (!wasManuallyAborted) {
+            notifyAgentComplete(agentChat?.name || "Agent")
           }
 
           // Refresh diff stats after agent finishes making changes
@@ -5991,10 +6462,13 @@ Make sure to preserve all functionality from both branches when resolving confli
                   // Ignore audio errors
                 }
               }
-
-              // Show native notification (desktop app, when window not focused)
-              notifyAgentComplete(agentChat?.name || "Agent")
             }
+          }
+
+          // Show native notification if not manually aborted
+          // (the hook handles focus/preference checks internally)
+          if (!wasManuallyAborted) {
+            notifyAgentComplete(agentChat?.name || "Agent")
           }
 
           // Refresh diff stats after agent finishes making changes
@@ -6021,15 +6495,44 @@ Make sure to preserve all functionality from both branches when resolving confli
     agentChat?.name,
   ])
 
+  // Handle creating a new sub-chat in split view
+  const handleCreateNewSubChatInSplit = useCallback(async () => {
+    const store = useAgentSubChatStore.getState()
+    const currentActive = store.activeSubChatId
+
+    // Create the new sub-chat first (reuses existing logic)
+    await handleCreateNewSubChat()
+
+    // After creation, the new sub-chat is now the active one
+    const newActive = useAgentSubChatStore.getState().activeSubChatId
+    if (newActive && currentActive && newActive !== currentActive) {
+      // If there's no existing split, addToSplit will create one with [currentActive, newActive]
+      // If there's an existing split, it will add newActive to it
+      // We need to set the active back to the original so addToSplit pairs correctly
+      store.setActiveSubChat(currentActive)
+      store.addToSplit(newActive)
+      // Set active to the new sub-chat
+      store.setActiveSubChat(newActive)
+    }
+  }, [handleCreateNewSubChat])
+
   // Keyboard shortcut: New sub-chat
   // Web: Opt+Cmd+T (browser uses Cmd+T for new tab)
   // Desktop: Cmd+T
+  // Desktop: Cmd+Shift+T → new sub-chat in split view
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const isDesktop = isDesktopApp()
 
-      // Desktop: Cmd+T (without Alt)
-      if (isDesktop && e.metaKey && e.code === "KeyT" && !e.altKey) {
+      // Desktop: Cmd+Shift+T → new sub-chat in split view
+      if (isDesktop && e.metaKey && e.shiftKey && e.code === "KeyT" && !e.altKey) {
+        e.preventDefault()
+        handleCreateNewSubChatInSplit()
+        return
+      }
+
+      // Desktop: Cmd+T (without Alt, without Shift)
+      if (isDesktop && e.metaKey && e.code === "KeyT" && !e.altKey && !e.shiftKey) {
         e.preventDefault()
         handleCreateNewSubChat()
         return
@@ -6044,7 +6547,7 @@ Make sure to preserve all functionality from both branches when resolving confli
 
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [handleCreateNewSubChat])
+  }, [handleCreateNewSubChat, handleCreateNewSubChatInSplit])
 
   // NOTE: Desktop notifications for pending questions are now triggered directly
   // in ipc-chat-transport.ts when the ask-user-question chunk arrives.
@@ -6390,10 +6893,11 @@ Make sure to preserve all functionality from both branches when resolving confli
 
   // Determine if chat header should be hidden
   const shouldHideChatHeader =
-    subChatsSidebarMode === "sidebar" &&
+    hideHeader ||
+    (subChatsSidebarMode === "sidebar" &&
     isPreviewSidebarOpen &&
     isDiffSidebarOpen &&
-    !isMobileFullscreen
+    !isMobileFullscreen)
 
   // No early return - let the UI render with loading state handled by activeChat check below
 
@@ -6598,7 +7102,7 @@ Make sure to preserve all functionality from both branches when resolving confli
                         className="h-6 px-2 gap-1.5 hover:bg-foreground/10 transition-colors text-foreground flex-shrink-0 rounded-md ml-2 flex items-center"
                         aria-label="Restore workspace"
                       >
-                        <IconTextUndo className="h-4 w-4" />
+                        <UnarchiveIcon className="h-4 w-4" />
                         <span className="text-xs">Restore</span>
                       </Button>
                     </TooltipTrigger>
@@ -6612,7 +7116,7 @@ Make sure to preserve all functionality from both branches when resolving confli
             </div>
           )}
 
-          {/* Chat Content - Keep-alive: render all open tabs, hide inactive with CSS */}
+          {/* Chat Content - render active tab explicitly (no hidden keep-alive tabs) */}
           {tabsToRender.length > 0 && agentChat ? (
             <div className="relative flex-1 min-h-0">
               {/* Loading gate: prevent getOrCreateChat() from caching empty messages before data is ready */}
@@ -6620,60 +7124,81 @@ Make sure to preserve all functionality from both branches when resolving confli
                 <div className="flex items-center justify-center h-full">
                   <IconSpinner className="h-6 w-6 animate-spin" />
                 </div>
+              ) : splitPaneIds.length >= 2 && splitPaneIds.includes(activeSubChatId) ? (
+                // SPLIT VIEW: active tab is part of the split group — show N panes
+                <SplitViewContainer
+                  panes={splitPaneIds.map(paneId => {
+                    const chat = getOrCreateChat(paneId)
+                    const isFirstSubChat = getFirstSubChatId(agentSubChats) === paneId
+                    return {
+                      id: paneId,
+                      content: chat ? (
+                        <ChatViewInner
+                          chat={chat}
+                          subChatId={paneId}
+                          parentChatId={chatId}
+                          isFirstSubChat={isFirstSubChat}
+                          onAutoRename={handleAutoRename}
+                          onCreateNewSubChat={handleCreateNewSubChat}
+                          teamId={selectedTeamId || undefined}
+                          repository={repository}
+                          streamId={agentChatStore.getStreamId(paneId)}
+                          isMobile={isMobileFullscreen}
+                          isSubChatsSidebarOpen={subChatsSidebarMode === "sidebar"}
+                          sandboxId={sandboxId || undefined}
+                          projectPath={worktreePath || undefined}
+                          isArchived={isArchived}
+                          onRestoreWorkspace={handleRestoreWorkspace}
+                          existingPrUrl={agentChat?.prUrl}
+                          isActive={true}
+                          isSplitPane={true}
+                        />
+                      ) : null,
+                    }
+                  })}
+                  onCloseSplit={() => useAgentSubChatStore.getState().closeSplit()}
+                />
               ) : (
-                tabsToRender.map(subChatId => {
-                const chat = getOrCreateChat(subChatId)
-                const isActive = subChatId === activeSubChatId
-                const isFirstSubChat = getFirstSubChatId(agentSubChats) === subChatId
+                // NORMAL VIEW: mount only the active sub-chat
+                (() => {
+                  const subChatId = activeSubChatId
+                  if (!subChatId) return null
 
-                // Defense in depth: double-check workspace ownership
-                // Use agentSubChats (server data) as primary source, fall back to allSubChats for optimistic updates
-                // This fixes the race condition where allSubChats is empty after setChatId but before setAllSubChats
-                const belongsToWorkspace = agentSubChats.some(sc => sc.id === subChatId) ||
-                                          allSubChats.some(sc => sc.id === subChatId)
+                  const chat = getOrCreateChat(subChatId)
+                  const isFirstSubChat = getFirstSubChatId(agentSubChats) === subChatId
 
-                if (!chat || !belongsToWorkspace) return null
+                  // Defense in depth: ensure active sub-chat belongs to current workspace
+                  const belongsToWorkspace =
+                    agentSubChats.some((sc) => sc.id === subChatId) ||
+                    allSubChats.some((sc) => sc.id === subChatId)
 
-                return (
-                  <div
-                    key={subChatId}
-                    className="absolute inset-0 flex flex-col"
-                    style={{
-                      // GPU-accelerated visibility switching (нативное ощущение)
-                      // transform + opacity быстрее чем visibility для GPU
-                      transform: isActive ? "translateZ(0)" : "translateZ(0) scale(0.98)",
-                      opacity: isActive ? 1 : 0,
-                      // Prevent pointer events on hidden tabs
-                      pointerEvents: isActive ? "auto" : "none",
-                      // GPU layer hints
-                      willChange: "transform, opacity",
-                      // Изолируем layout - изменения внутри не влияют на другие табы
-                      contain: "layout style paint",
-                    }}
-                    aria-hidden={!isActive}
-                  >
-                    <ChatViewInner
-                      chat={chat}
-                      subChatId={subChatId}
-                      parentChatId={chatId}
-                      isFirstSubChat={isFirstSubChat}
-                      onAutoRename={handleAutoRename}
-                      onCreateNewSubChat={handleCreateNewSubChat}
-                      teamId={selectedTeamId || undefined}
-                      repository={repository}
-                      streamId={agentChatStore.getStreamId(subChatId)}
-                      isMobile={isMobileFullscreen}
-                      isSubChatsSidebarOpen={subChatsSidebarMode === "sidebar"}
-                      sandboxId={sandboxId || undefined}
-                      projectPath={worktreePath || undefined}
-                      isArchived={isArchived}
-                      onRestoreWorkspace={handleRestoreWorkspace}
-                      existingPrUrl={agentChat?.prUrl}
-                      isActive={isActive}
-                    />
-                  </div>
-                )
-              })
+                  if (!chat || !belongsToWorkspace) return null
+
+                  return (
+                    <div key={subChatId} className="absolute inset-0 flex flex-col">
+                      <ChatViewInner
+                        key={subChatId}
+                        chat={chat}
+                        subChatId={subChatId}
+                        parentChatId={chatId}
+                        isFirstSubChat={isFirstSubChat}
+                        onAutoRename={handleAutoRename}
+                        onCreateNewSubChat={handleCreateNewSubChat}
+                        teamId={selectedTeamId || undefined}
+                        repository={repository}
+                        streamId={agentChatStore.getStreamId(subChatId)}
+                        isMobile={isMobileFullscreen}
+                        isSubChatsSidebarOpen={subChatsSidebarMode === "sidebar"}
+                        sandboxId={sandboxId || undefined}
+                        projectPath={worktreePath || undefined}
+                        isArchived={isArchived}
+                        onRestoreWorkspace={handleRestoreWorkspace}
+                        existingPrUrl={agentChat?.prUrl}
+                        isActive={true}
+                      />
+                    </div>
+                  )
+                })()
               )}
             </div>
           ) : (
@@ -6753,9 +7278,8 @@ Make sure to preserve all functionality from both branches when resolving confli
           )}
         </div>
 
-        {/* Plan Sidebar - shows plan files on the right (leftmost right sidebar) */}
-        {/* Only show when we have an active sub-chat with a plan */}
-        {!isMobileFullscreen && activeSubChatIdForPlan && (
+        {/* Plan Sidebar - side-peek mode (ResizableSidebar) */}
+        {!isMobileFullscreen && activeSubChatIdForPlan && effectivePlanDisplayMode === "side-peek" && (
           <ResizableSidebar
             isOpen={isPlanSidebarOpen && !!currentPlanPath}
             onClose={() => setIsPlanSidebarOpen(false)}
@@ -6777,8 +7301,29 @@ Make sure to preserve all functionality from both branches when resolving confli
               onBuildPlan={handleApprovePlanFromSidebar}
               refetchTrigger={planEditRefetchTrigger}
               mode={currentMode}
+              displayMode="side-peek"
+              onDisplayModeChange={handlePlanDisplayModeChange}
             />
           </ResizableSidebar>
+        )}
+        {/* Plan Sidebar - center-peek mode (Dialog overlay) */}
+        {activeSubChatIdForPlan && effectivePlanDisplayMode === "center-peek" && isPlanSidebarOpen && !!currentPlanPath && (
+          <DiffCenterPeekDialog
+            isOpen={true}
+            onClose={() => setIsPlanSidebarOpen(false)}
+          >
+            <AgentPlanSidebar
+              chatId={activeSubChatIdForPlan}
+              planPath={currentPlanPath}
+              onClose={() => setIsPlanSidebarOpen(false)}
+              onBuildPlan={handleApprovePlanFromSidebar}
+              refetchTrigger={planEditRefetchTrigger}
+              mode={currentMode}
+              displayMode="center-peek"
+              onDisplayModeChange={handlePlanDisplayModeChange}
+              isSplitView={isSplitView}
+            />
+          </DiffCenterPeekDialog>
         )}
 
         {/* Diff View - hidden on mobile fullscreen and when diff is not available */}
@@ -6840,6 +7385,7 @@ Make sure to preserve all functionality from both branches when resolving confli
               isCommittingToPr={isCommittingToPr}
               subChatsWithFiles={subChatsWithFiles}
               setDiffStats={setDiffStats}
+              onDiscardSuccess={scheduleDiffRefresh}
             />
           </DiffStateProvider>
         )}
@@ -6990,7 +7536,7 @@ Make sure to preserve all functionality from both branches when resolving confli
             onBuildPlan={handleApprovePlanFromSidebar}
             planRefetchTrigger={planEditRefetchTrigger}
             activeSubChatId={activeSubChatIdForPlan}
-            isPlanSidebarOpen={isPlanSidebarOpen && !!currentPlanPath}
+            isPlanSidebarOpen={isPlanSidebarOpen && !!currentPlanPath && effectivePlanDisplayMode === "side-peek"}
             isTerminalSidebarOpen={isTerminalSidebarOpen}
             isDiffSidebarOpen={isDiffSidebarOpen}
             diffDisplayMode={diffDisplayMode}
@@ -6998,8 +7544,12 @@ Make sure to preserve all functionality from both branches when resolving confli
             setIsDiffSidebarOpen={setIsDiffSidebarOpen}
             diffStats={diffStats}
             parsedFileDiffs={parsedFileDiffs}
-            onCommit={handleCommitToPr}
-            isCommitting={isCommittingToPr}
+            onCommit={worktreePath ? handleCommitChanges : undefined}
+            onCommitAndPush={worktreePath ? handleCommitAndPush : undefined}
+            isCommitting={isCommittingCombined}
+            gitStatus={gitStatus}
+            isGitStatusLoading={isGitStatusLoading}
+            currentBranch={branchData?.current}
             onExpandTerminal={() => setIsTerminalSidebarOpen(true)}
             onExpandPlan={() => setIsPlanSidebarOpen(true)}
             onExpandDiff={() => setIsDiffSidebarOpen(true)}

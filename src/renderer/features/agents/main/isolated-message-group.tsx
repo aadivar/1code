@@ -1,16 +1,21 @@
 "use client"
 
-import { memo, useMemo } from "react"
+import { memo, useCallback, useMemo } from "react"
 import { useAtomValue } from "jotai"
 import {
   messageAtomFamily,
-  assistantIdsForUserMsgAtomFamily,
-  isLastUserMessageAtomFamily,
-  isStreamingAtom,
+  assistantIdsPerChatAtomFamily,
+  isLastUserMessagePerChatAtomFamily,
+  rollbackTargetPerChatAtomFamily,
+  isRollingBackAtom,
 } from "../stores/message-store"
+import { useStreamingStatusStore } from "../stores/streaming-status-store"
 import { MemoizedAssistantMessages } from "./messages-list"
 import { extractTextMentions, TextMentionBlocks, TextMentionBlock } from "../mentions/render-file-mentions"
 import { AgentImageItem } from "../ui/agent-image-item"
+import { IconTextUndo } from "../../../components/ui/icons"
+import { Tooltip, TooltipContent, TooltipTrigger } from "../../../components/ui/tooltip"
+import { cn } from "../../../lib/utils"
 
 // ============================================================================
 // ISOLATED MESSAGE GROUP (LAYER 4)
@@ -38,6 +43,7 @@ interface IsolatedMessageGroupProps {
   stickyTopClass: string
   sandboxSetupError?: string
   onRetrySetup?: () => void
+  onRollback?: (msg: any) => void
   // Components passed from parent - must be stable references
   UserBubbleComponent: React.ComponentType<{
     messageId: string
@@ -65,13 +71,14 @@ function areGroupPropsEqual(
     prev.chatId === next.chatId &&
     prev.isMobile === next.isMobile &&
     prev.sandboxSetupStatus === next.sandboxSetupStatus &&
-  prev.stickyTopClass === next.stickyTopClass &&
-  prev.sandboxSetupError === next.sandboxSetupError &&
-  prev.onRetrySetup === next.onRetrySetup &&
-  prev.UserBubbleComponent === next.UserBubbleComponent &&
-  prev.ToolCallComponent === next.ToolCallComponent &&
-  prev.MessageGroupWrapper === next.MessageGroupWrapper &&
-  prev.toolRegistry === next.toolRegistry
+    prev.stickyTopClass === next.stickyTopClass &&
+    prev.sandboxSetupError === next.sandboxSetupError &&
+    prev.onRetrySetup === next.onRetrySetup &&
+    prev.onRollback === next.onRollback &&
+    prev.UserBubbleComponent === next.UserBubbleComponent &&
+    prev.ToolCallComponent === next.ToolCallComponent &&
+    prev.MessageGroupWrapper === next.MessageGroupWrapper &&
+    prev.toolRegistry === next.toolRegistry
   )
 }
 
@@ -84,16 +91,27 @@ export const IsolatedMessageGroup = memo(function IsolatedMessageGroup({
   stickyTopClass,
   sandboxSetupError,
   onRetrySetup,
+  onRollback,
   UserBubbleComponent,
   ToolCallComponent,
   MessageGroupWrapper,
   toolRegistry,
 }: IsolatedMessageGroupProps) {
   // Subscribe to specific atoms - NOT the whole messages array
+  // Use per-subChat families so split view panes render independently
+  const perChatKey = `${subChatId}:${userMsgId}`
   const userMsg = useAtomValue(messageAtomFamily(userMsgId))
-  const assistantIds = useAtomValue(assistantIdsForUserMsgAtomFamily(userMsgId))
-  const isLastGroup = useAtomValue(isLastUserMessageAtomFamily(userMsgId))
-  const isStreaming = useAtomValue(isStreamingAtom)
+  const assistantIds = useAtomValue(assistantIdsPerChatAtomFamily(perChatKey))
+  const isLastGroup = useAtomValue(isLastUserMessagePerChatAtomFamily(perChatKey))
+  const rollbackTargetSdkUuid = useAtomValue(rollbackTargetPerChatAtomFamily(perChatKey))
+  const subChatStatus = useStreamingStatusStore(
+    useCallback((s) => s.statuses[subChatId] ?? "ready", [subChatId])
+  )
+  const isStreaming = subChatStatus === "streaming" || subChatStatus === "submitted"
+  const isRollingBack = useAtomValue(isRollingBackAtom)
+
+  // Show rollback button only when this user turn has a valid rollback target.
+  const canRollback = onRollback && !!rollbackTargetSdkUuid && !isStreaming
 
   // Extract user message content
   // Note: file-content parts are hidden from UI but sent to agent
@@ -133,21 +151,25 @@ export const IsolatedMessageGroup = memo(function IsolatedMessageGroup({
     <MessageGroupWrapper isLastGroup={isLastGroup}>
       {/* All attachments in one row - NOT sticky (only when there's also text) */}
       {((!isImageOnlyMessage && imageParts.length > 0) || textMentions.length > 0) && (
-        <div className="mb-2 pointer-events-auto flex flex-wrap items-end gap-1.5">
+        <div className="mb-2 pointer-events-auto flex flex-wrap items-center gap-1.5">
           {imageParts.length > 0 && !isImageOnlyMessage && (() => {
+            const resolveImgUrl = (img: any) =>
+              img.data?.base64Data && img.data?.mediaType
+                ? `data:${img.data.mediaType};base64,${img.data.base64Data}`
+                : img.data?.url || ""
             const allImages = imageParts
-              .filter((img: any) => img.data?.url)
+              .filter((img: any) => img.data?.url || img.data?.base64Data)
               .map((img: any, idx: number) => ({
                 id: `${userMsgId}-img-${idx}`,
                 filename: img.data?.filename || "image",
-                url: img.data?.url || "",
+                url: resolveImgUrl(img),
               }))
             return imageParts.map((img: any, idx: number) => (
               <AgentImageItem
                 key={`${userMsgId}-img-${idx}`}
                 id={`${userMsgId}-img-${idx}`}
                 filename={img.data?.filename || "image"}
-                url={img.data?.url || ""}
+                url={resolveImgUrl(img)}
                 allImages={allImages}
                 imageIndex={idx}
               />
@@ -162,39 +184,69 @@ export const IsolatedMessageGroup = memo(function IsolatedMessageGroup({
       {/* User message text - sticky (or attachment-only summary bubble) */}
       <div
         data-user-message-id={userMsgId}
-        className={`[&>div]:!mb-4 pointer-events-auto sticky z-10 ${stickyTopClass}`}
+        className={`group/user-message [&>div]:!mb-4 pointer-events-auto sticky z-10 ${stickyTopClass}`}
       >
         {/* Show "Using X" summary when no text but have attachments */}
-        {isAttachmentOnlyMessage && !isImageOnlyMessage ? (
-          <div className="flex justify-start drop-shadow-[0_10px_20px_hsl(var(--background))]" data-user-bubble>
-            <div className="space-y-2 w-full">
-              <div className="bg-input-background border px-3 py-2 rounded-xl text-sm text-muted-foreground italic">
-              {(() => {
-                const parts: string[] = []
-                if (imageParts.length > 0) {
-                  parts.push(imageParts.length === 1 ? "image" : `${imageParts.length} images`)
-                }
-                const quoteCount = textMentions.filter(m => m.type === "quote" || m.type === "pasted").length
-                const codeCount = textMentions.filter(m => m.type === "diff").length
-                if (quoteCount > 0) {
-                  parts.push(quoteCount === 1 ? "selected text" : `${quoteCount} text selections`)
-                }
-                if (codeCount > 0) {
-                  parts.push(codeCount === 1 ? "code selection" : `${codeCount} code selections`)
-                }
-                return `Using ${parts.join(", ")}`
-              })()}
+        <div className="relative">
+          {isAttachmentOnlyMessage && !isImageOnlyMessage ? (
+            <div className="flex justify-start drop-shadow-[0_10px_20px_hsl(var(--background))]" data-user-bubble>
+              <div className="space-y-2 w-full">
+                <div className="bg-input-background border px-3 py-2 rounded-xl text-sm text-muted-foreground italic">
+                {(() => {
+                  const parts: string[] = []
+                  if (imageParts.length > 0) {
+                    parts.push(imageParts.length === 1 ? "image" : `${imageParts.length} images`)
+                  }
+                  const quoteCount = textMentions.filter(m => m.type === "quote").length
+                  const pastedCount = textMentions.filter(m => m.type === "pasted").length
+                  const codeCount = textMentions.filter(m => m.type === "diff").length
+                  if (quoteCount > 0) {
+                    parts.push(quoteCount === 1 ? "selected text" : `${quoteCount} text selections`)
+                  }
+                  if (pastedCount > 0) {
+                    parts.push(pastedCount === 1 ? "pasted text" : `${pastedCount} pasted texts`)
+                  }
+                  if (codeCount > 0) {
+                    parts.push(codeCount === 1 ? "code selection" : `${codeCount} code selections`)
+                  }
+                  return `Using ${parts.join(", ")}`
+                })()}
+                </div>
               </div>
             </div>
-          </div>
-        ) : (
-          <UserBubbleComponent
-            messageId={userMsgId}
-            textContent={textContent}
-            imageParts={isImageOnlyMessage ? imageParts : []}
-            skipTextMentionBlocks={!isImageOnlyMessage}
-          />
-        )}
+          ) : (
+            <UserBubbleComponent
+              messageId={userMsgId}
+              textContent={textContent}
+              imageParts={isImageOnlyMessage ? imageParts : []}
+              skipTextMentionBlocks={!isImageOnlyMessage}
+            />
+          )}
+
+          {/* Rollback button - overlay bottom-right of user bubble */}
+          {canRollback && (
+            <div className="absolute bottom-1 right-1 z-20">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={() => onRollback(userMsg)}
+                    disabled={isRollingBack}
+                    tabIndex={-1}
+                    className={cn(
+                      "p-1 rounded-md transition-all duration-150 ease-out hover:bg-accent/80 active:scale-[0.97] opacity-0 group-hover/user-message:opacity-100",
+                      isRollingBack && "!opacity-50 cursor-not-allowed",
+                    )}
+                  >
+                    <IconTextUndo className="w-3.5 h-3.5 text-muted-foreground" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {isRollingBack ? "Rolling back..." : "Rollback to here"}
+                </TooltipContent>
+              </Tooltip>
+            </div>
+          )}
+        </div>
 
         {/* Cloning indicator */}
         {shouldShowCloning && (

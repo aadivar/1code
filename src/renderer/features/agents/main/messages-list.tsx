@@ -5,11 +5,11 @@ import { createContext, memo, useCallback, useContext, useLayoutEffect, useMemo,
 import { showMessageJsonAtom } from "../atoms"
 import { extractTextMentions, TextMentionBlocks } from "../mentions/render-file-mentions"
 import {
-  chatStatusAtom,
   isLastMessageAtomFamily,
-  isStreamingAtom,
+  isLastMessagePerChatAtomFamily,
   messageAtomFamily,
 } from "../stores/message-store"
+import { useStreamingStatusStore } from "../stores/streaming-status-store"
 import { MessageJsonDisplay } from "../ui/message-json-display"
 import { AssistantMessageItem } from "./assistant-message-item"
 
@@ -407,9 +407,11 @@ const StreamingMessageItem = memo(function StreamingMessageItem({
   // Subscribe to this specific message via Jotai - only re-renders when THIS message changes
   const message = useAtomValue(messageAtomFamily(messageId))
 
-  // Subscribe to streaming status
-  const isStreaming = useAtomValue(isStreamingAtom)
-  const status = useAtomValue(chatStatusAtom)
+  // Subscribe to per-subchat streaming status (fixes split view concurrent streaming)
+  const status = useStreamingStatusStore(
+    useCallback((s) => s.statuses[subChatId] ?? "ready", [subChatId])
+  )
+  const isStreaming = status === "streaming" || status === "submitted"
 
   if (!message) return null
 
@@ -484,7 +486,9 @@ export const MessageItemWrapper = memo(function MessageItemWrapper({
 
   // Only subscribe to isLast - NOT to message content!
   // StreamingMessageItem and NonStreamingMessageItem will subscribe to message themselves
-  const isLast = useAtomValue(isLastMessageAtomFamily(messageId))
+  // Use per-subchat atom to avoid cross-pane interference in split view
+  const perChatKey = `${subChatId}:${messageId}`
+  const isLast = useAtomValue(isLastMessagePerChatAtomFamily(perChatKey))
 
   // Only the last message subscribes to streaming status
   if (isLast) {
@@ -1041,10 +1045,14 @@ export const SimpleIsolatedGroup = memo(function SimpleIsolatedGroup({
                   if (imageParts.length > 0) {
                     parts.push(imageParts.length === 1 ? "image" : `${imageParts.length} images`)
                   }
-                  const quoteCount = textMentions.filter(m => m.type === "quote" || m.type === "pasted").length
+                  const quoteCount = textMentions.filter(m => m.type === "quote").length
+                  const pastedCount = textMentions.filter(m => m.type === "pasted").length
                   const codeCount = textMentions.filter(m => m.type === "diff").length
                   if (quoteCount > 0) {
                     parts.push(quoteCount === 1 ? "selected text" : `${quoteCount} text selections`)
+                  }
+                  if (pastedCount > 0) {
+                    parts.push(pastedCount === 1 ? "pasted text" : `${pastedCount} pasted texts`)
                   }
                   if (codeCount > 0) {
                     parts.push(codeCount === 1 ? "code selection" : `${codeCount} code selections`)

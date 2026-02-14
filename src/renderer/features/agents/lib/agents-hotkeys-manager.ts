@@ -34,6 +34,7 @@ const SHORTCUT_TO_ACTION_MAP: Record<ShortcutActionId, string> = {
   "quick-switch-workspaces": "quick-switch-workspaces",
   "open-kanban": "open-kanban",
   "new-agent": "create-new-agent",
+  "new-agent-split": "create-new-agent-split",
   "search-chats": "search-chats",
   "search-in-chat": "toggle-chat-search",
   "archive-agent": "archive-agent",

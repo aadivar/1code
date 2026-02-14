@@ -54,14 +54,17 @@ function AppContent() {
   const setSelectedChatId = useSetAtom(selectedAgentChatIdAtom)
   const { setActiveSubChat, addToOpenSubChats, setChatId } = useAgentSubChatStore()
 
-  // Apply initial window params (chatId/subChatId) when opening via "Open in new window"
+  // Apply initial window params (chatId/subChatId/splitPaneIds) when opening via "Open in new window"
   useEffect(() => {
     const params = getInitialWindowParams()
     if (params.chatId) {
-      console.log("[App] Opening chat from window params:", params.chatId, params.subChatId)
+      console.log("[App] Opening chat from window params:", params.chatId, params.subChatId, params.splitPaneIds)
       setSelectedChatId(params.chatId)
       setChatId(params.chatId)
-      if (params.subChatId) {
+      if (params.splitPaneIds && params.splitPaneIds.length >= 2) {
+        // Open all split panes in the new window
+        useAgentSubChatStore.getState().initSplitFromWindow(params.splitPaneIds)
+      } else if (params.subChatId) {
         addToOpenSubChats(params.subChatId)
         setActiveSubChat(params.subChatId)
       }

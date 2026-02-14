@@ -47,12 +47,14 @@ const QueueItemRow = memo(function QueueItemRow({
     (item.images && item.images.length > 0) ||
     (item.files && item.files.length > 0) ||
     (item.textContexts && item.textContexts.length > 0) ||
-    (item.diffTextContexts && item.diffTextContexts.length > 0)
+    (item.diffTextContexts && item.diffTextContexts.length > 0) ||
+    (item.pastedTexts && item.pastedTexts.length > 0)
   const attachmentCount =
     (item.images?.length || 0) +
     (item.files?.length || 0) +
     (item.textContexts?.length || 0) +
-    (item.diffTextContexts?.length || 0)
+    (item.diffTextContexts?.length || 0) +
+    (item.pastedTexts?.length || 0)
 
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted/50 transition-colors cursor-default">

@@ -398,6 +398,12 @@ export function NewChatForm({
   const tooltipTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const hasShownTooltipRef = useRef(false)
   const [modeDropdownOpen, setModeDropdownOpen] = useState(false)
+
+  useEffect(() => {
+    if (!modeDropdownOpen) {
+      setModeTooltip(null)
+    }
+  }, [modeDropdownOpen])
   const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false)
 
   // Voice input state
@@ -674,6 +680,10 @@ export function NewChatForm({
     }
   }, [validatedProject?.path, fetchRemoteMutation, branchesQuery])
 
+  // Stable ref for handleRefreshBranches to avoid re-running effects on every render
+  const handleRefreshBranchesRef = useRef(handleRefreshBranches)
+  handleRefreshBranchesRef.current = handleRefreshBranches
+
   // Transform branch data to match web app format
   const branches = useMemo(() => {
     if (!branchesQuery.data) return []
@@ -823,7 +833,7 @@ export function NewChatForm({
 
         // Fetch remote branches in background when starting new workspace
         if (validatedProject?.path) {
-          handleRefreshBranches()
+          handleRefreshBranchesRef.current()
         }
       }
       return
@@ -848,7 +858,7 @@ export function NewChatForm({
         return () => clearTimeout(timeoutId)
       }
     }
-  }, [selectedDraftId, handleRefreshBranches, validatedProject?.path])
+  }, [selectedDraftId, validatedProject?.path])
 
   // Mark draft as visible when component unmounts (user navigates away)
   // This ensures the draft only appears in the sidebar after leaving the form
@@ -1413,7 +1423,7 @@ export function NewChatForm({
   // Context items for images, files, and pasted text files
   const contextItems =
     images.length > 0 || files.length > 0 || pastedTexts.length > 0 ? (
-      <div className="flex flex-wrap gap-[6px]">
+      <div className="flex flex-wrap items-center gap-[6px]">
         {(() => {
           // Build allImages array for gallery navigation
           const allImages = images
@@ -1803,7 +1813,7 @@ export function NewChatForm({
                                 ) : (
                                   <>
                                     {selectedModel?.name}{" "}
-                                    <span className="text-muted-foreground">4.5</span>
+                                    <span className="text-muted-foreground">{selectedModel?.version}</span>
                                   </>
                                 )}
                               </span>
@@ -1826,7 +1836,7 @@ export function NewChatForm({
                                     <ClaudeCodeIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                                     <span>
                                       {model.name}{" "}
-                                      <span className="text-muted-foreground">4.5</span>
+                                      <span className="text-muted-foreground">{model.version}</span>
                                     </span>
                                   </div>
                                   {isSelected && (

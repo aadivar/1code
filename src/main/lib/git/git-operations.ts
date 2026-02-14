@@ -5,6 +5,7 @@ import { publicProcedure, router } from "../trpc";
 import { isUpstreamMissingError } from "./git-utils";
 import { assertRegisteredWorktree } from "./security";
 import { fetchGitHubPRStatus } from "./github";
+import { gitCache } from "./cache";
 import {
 	createGit,
 	createGitForNetwork,
@@ -31,6 +32,12 @@ async function hasUpstreamBranch(
 /** Protected branches that should not be force-pushed to */
 const PROTECTED_BRANCHES = ["main", "master", "develop", "production", "staging"];
 
+function invalidateGitStateCaches(worktreePath: string): void {
+	gitCache.invalidateStatus(worktreePath);
+	gitCache.invalidateParsedDiff(worktreePath);
+	gitCache.invalidateAllFileContents(worktreePath);
+}
+
 export const createGitOperationsRouter = () => {
 	return router({
 		// NOTE: saveFile is defined in file-contents.ts with hardened path validation
@@ -50,6 +57,7 @@ export const createGitOperationsRouter = () => {
 					await withLockRetry(input.worktreePath, () =>
 						git.fetch(["--all", "--prune"])
 					);
+					invalidateGitStateCaches(input.worktreePath);
 					return { success: true };
 				});
 			}),
@@ -76,6 +84,7 @@ export const createGitOperationsRouter = () => {
 					await withLockRetry(input.worktreePath, () =>
 						git.checkout(input.branch)
 					);
+					invalidateGitStateCaches(input.worktreePath);
 					return { success: true };
 				});
 			}),
@@ -98,6 +107,7 @@ export const createGitOperationsRouter = () => {
 						author: string;
 						email: string;
 						date: Date;
+						tags: string[];
 					}>
 				> => {
 					assertRegisteredWorktree(input.worktreePath);
@@ -106,7 +116,7 @@ export const createGitOperationsRouter = () => {
 					const logOutput = await git.raw([
 						"log",
 						`-${input.limit}`,
-						"--format=%H|%h|%s|%an|%ae|%aI",
+						"--format=%H|%h|%s|%an|%ae|%aI|%D",
 					]);
 
 					if (!logOutput.trim()) return [];
@@ -115,8 +125,14 @@ export const createGitOperationsRouter = () => {
 						.trim()
 						.split("\n")
 						.map((line) => {
-							const [hash, shortHash, message, author, email, dateStr] =
+							const [hash, shortHash, message, author, email, dateStr, refs] =
 								line.split("|");
+							// Extract tags from ref names (format: "HEAD -> main, tag: v1.0.0, origin/main")
+							const tags = (refs || "")
+								.split(",")
+								.map((r) => r.trim())
+								.filter((r) => r.startsWith("tag: "))
+								.map((r) => r.replace("tag: ", ""));
 							return {
 								hash: hash || "",
 								shortHash: shortHash || "",
@@ -124,6 +140,7 @@ export const createGitOperationsRouter = () => {
 								author: author || "",
 								email: email || "",
 								date: new Date(dateStr || ""),
+								tags,
 							};
 						});
 				},
@@ -157,6 +174,7 @@ export const createGitOperationsRouter = () => {
 						const result = await withLockRetry(input.worktreePath, () =>
 							git.commit(input.message)
 						);
+						invalidateGitStateCaches(input.worktreePath);
 						return { success: true, hash: result.commit };
 					});
 				},
@@ -209,6 +227,7 @@ export const createGitOperationsRouter = () => {
 							git.commit(input.message)
 						);
 
+						invalidateGitStateCaches(input.worktreePath);
 						return { success: true, hash: result.commit };
 					});
 				},
@@ -237,6 +256,7 @@ export const createGitOperationsRouter = () => {
 						await withLockRetry(input.worktreePath, () => git.push());
 					}
 					await git.fetch();
+					invalidateGitStateCaches(input.worktreePath);
 					return { success: true };
 				});
 			}),
@@ -309,6 +329,7 @@ export const createGitOperationsRouter = () => {
 						}
 						throw error;
 					}
+					invalidateGitStateCaches(input.worktreePath);
 					return { success: true };
 				});
 			}),
@@ -369,6 +390,7 @@ export const createGitOperationsRouter = () => {
 								git.push(["--set-upstream", "origin", branch.trim()])
 							);
 							await git.fetch();
+							invalidateGitStateCaches(input.worktreePath);
 							return { success: true };
 						}
 						// Check for rebase conflicts
@@ -382,6 +404,7 @@ export const createGitOperationsRouter = () => {
 					}
 					await withLockRetry(input.worktreePath, () => git.push());
 					await git.fetch();
+					invalidateGitStateCaches(input.worktreePath);
 					return { success: true };
 				});
 			}),
@@ -413,6 +436,7 @@ export const createGitOperationsRouter = () => {
 						git.push(["--force-with-lease"])
 					);
 					await git.fetch();
+					invalidateGitStateCaches(input.worktreePath);
 					return { success: true };
 				});
 			}),
@@ -496,6 +520,7 @@ export const createGitOperationsRouter = () => {
 						throw error;
 					}
 
+					invalidateGitStateCaches(input.worktreePath);
 					return { success: true };
 				});
 			}),
@@ -513,6 +538,7 @@ export const createGitOperationsRouter = () => {
 				return withGitLock(input.worktreePath, async () => {
 					const git = createGit(input.worktreePath);
 					await git.rebase(["--abort"]);
+					invalidateGitStateCaches(input.worktreePath);
 					return { success: true };
 				});
 			}),
@@ -530,6 +556,7 @@ export const createGitOperationsRouter = () => {
 				return withGitLock(input.worktreePath, async () => {
 					const git = createGit(input.worktreePath);
 					await git.merge(["--abort"]);
+					invalidateGitStateCaches(input.worktreePath);
 					return { success: true };
 				});
 			}),
@@ -586,6 +613,7 @@ export const createGitOperationsRouter = () => {
 
 						await shell.openExternal(url);
 						await git.fetch();
+						invalidateGitStateCaches(input.worktreePath);
 
 						return { success: true, url };
 					});

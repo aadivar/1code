@@ -26,6 +26,7 @@ export type UIMessageChunk =
   // Error & metadata
   | { type: "error"; errorText: string }
   | { type: "auth-error"; errorText: string }
+  | { type: "retry-notification"; message: string }
   | {
       type: "ask-user-question"
       toolUseId: string
@@ -38,12 +39,6 @@ export type UIMessageChunk =
     }
   | { type: "ask-user-question-timeout"; toolUseId: string }
   | { type: "message-metadata"; messageMetadata: MessageMetadata }
-  // System tools (rendered like regular tools)
-  | {
-      type: "system-Compact"
-      toolCallId: string
-      state: "input-streaming" | "output-available"
-    }
   // Session initialization (MCP servers, plugins, tools)
   | {
       type: "session-init"
@@ -73,24 +68,16 @@ export type MCPServer = {
   error?: string
 }
 
-export type ModelUsageEntry = {
-  inputTokens: number
-  outputTokens: number
-  cacheReadInputTokens: number
-  cacheCreationInputTokens: number
-  costUSD: number
-}
-
 export type MessageMetadata = {
   sessionId?: string
   sdkMessageUuid?: string // SDK's message UUID for resumeSessionAt (rollback support)
   inputTokens?: number
+  cacheReadInputTokens?: number
+  cacheCreationInputTokens?: number
   outputTokens?: number
   totalTokens?: number
   totalCostUsd?: number
   durationMs?: number
   resultSubtype?: string
   finalTextId?: string
-  // Per-model usage breakdown from SDK (model name -> usage)
-  modelUsage?: Record<string, ModelUsageEntry>
 }

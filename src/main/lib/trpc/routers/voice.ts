@@ -96,13 +96,13 @@ async function getUserPlan(): Promise<{ plan: string; status: string | null } | 
 }
 
 /**
- * Check if user has paid subscription (onecode_pro or onecode_max with active status)
+ * Check if user has paid subscription (onecode_pro, onecode_max_100, or onecode_max with active status)
  */
 async function hasPaidSubscription(): Promise<boolean> {
   const planData = await getUserPlan()
   if (!planData) return false
 
-  const paidPlans = ["onecode_pro", "onecode_max"]
+  const paidPlans = ["onecode_pro", "onecode_max_100", "onecode_max"]
   return paidPlans.includes(planData.plan) && planData.status === "active"
 }
 

@@ -58,14 +58,28 @@ export const messageIdsAtom = atom<string[]>([])
 // This avoids reading all message atoms just to check roles
 const messageRolesAtom = atom<Map<string, "user" | "assistant" | "system">>(new Map())
 
+// ============================================================================
+// PER-SUBCHAT ATOM FAMILIES (for split view support)
+// ============================================================================
+// The global atoms above only hold data for one active chat at a time.
+// For split view, we need per-subChat atoms so each pane renders its own messages.
+// The per-message atoms (messageAtomFamily) are already per-message-ID and work fine.
+
+export const messageIdsPerChatAtom = atomFamily((_subChatId: string) =>
+  atom<string[]>([])
+)
+
+const messageRolesPerChatAtom = atomFamily((_subChatId: string) =>
+  atom<Map<string, "user" | "assistant" | "system">>(new Map())
+)
+
 // Currently streaming message ID (null if not streaming)
 export const streamingMessageIdAtom = atom<string | null>(null)
 
 // Chat status atom
 export const chatStatusAtom = atom<string>("ready")
 
-// Rollback handler/state (optional) to avoid prop drilling
-export const rollbackHandlerAtom = atom<((msg: any) => void) | null>(null)
+// Global rollback state - prevents multiple rollbacks across all chats
 export const isRollingBackAtom = atom<boolean>(false)
 
 // Current subChatId - used to isolate caches per chat
@@ -85,6 +99,17 @@ export const lastMessageIdAtom = atom((get) => {
 export const isLastMessageAtomFamily = atomFamily((messageId: string) =>
   atom((get) => get(lastMessageIdAtom) === messageId)
 )
+
+// Per-subchat version: "subChatId:messageId" key
+export const isLastMessagePerChatAtomFamily = atomFamily((key: string) => {
+  const sepIdx = key.indexOf(":")
+  const subChatId = key.slice(0, sepIdx)
+  const messageId = key.slice(sepIdx + 1)
+  return atom((get) => {
+    const ids = get(messageIdsPerChatAtom(subChatId))
+    return ids.length > 0 && ids[ids.length - 1] === messageId
+  })
+})
 
 // Check if a specific message is currently streaming
 export const isMessageStreamingAtomFamily = atomFamily((messageId: string) =>
@@ -256,6 +281,28 @@ export const userMessageIdsAtom = atom((get) => {
   return newUserIds
 })
 
+// Per-subChat version (for split view)
+const userMessageIdsPerChatCache = new Map<string, string[]>()
+export const userMessageIdsPerChatAtom = atomFamily((subChatId: string) =>
+  atom((get) => {
+    const ids = get(messageIdsPerChatAtom(subChatId))
+    const roles = get(messageRolesPerChatAtom(subChatId))
+    const newUserIds = ids.filter((id) => roles.get(id) === "user")
+
+    const cached = userMessageIdsPerChatCache.get(subChatId)
+    if (
+      cached &&
+      newUserIds.length === cached.length &&
+      newUserIds.every((id, i) => id === cached[i])
+    ) {
+      return cached
+    }
+
+    userMessageIdsPerChatCache.set(subChatId, newUserIds)
+    return newUserIds
+  })
+)
+
 // ============================================================================
 // MESSAGE GROUPS - For rendering structure
 // ============================================================================
@@ -314,6 +361,101 @@ export const messageGroupsAtom = atom((get) => {
   return groups
 })
 
+// Per-subChat message groups (for split view)
+function buildMessageGroups(ids: string[], roles: Map<string, string>): MessageGroupType[] {
+  const groups: MessageGroupType[] = []
+  let currentGroup: MessageGroupType | null = null
+  for (const id of ids) {
+    const role = roles.get(id)
+    if (!role) continue
+    if (role === "user") {
+      if (currentGroup) groups.push(currentGroup)
+      currentGroup = { userMsgId: id, assistantMsgIds: [] }
+    } else if (currentGroup && role === "assistant") {
+      currentGroup.assistantMsgIds.push(id)
+    }
+  }
+  if (currentGroup) groups.push(currentGroup)
+  return groups
+}
+
+const messageGroupsPerChatCache = new Map<string, MessageGroupType[]>()
+const messageGroupsPerChatAtom = atomFamily((subChatId: string) =>
+  atom((get) => {
+    const ids = get(messageIdsPerChatAtom(subChatId))
+    const roles = get(messageRolesPerChatAtom(subChatId))
+    const groups = buildMessageGroups(ids, roles as Map<string, string>)
+
+    const cached = messageGroupsPerChatCache.get(subChatId) ?? []
+    if (groups.length === cached.length) {
+      let allMatch = true
+      for (let i = 0; i < groups.length; i++) {
+        const ng = groups[i], cg = cached[i]
+        if (ng.userMsgId !== cg?.userMsgId || ng.assistantMsgIds.length !== cg?.assistantMsgIds.length ||
+            !ng.assistantMsgIds.every((id, j) => id === cg?.assistantMsgIds[j])) {
+          allMatch = false
+          break
+        }
+      }
+      if (allMatch) return cached
+    }
+    messageGroupsPerChatCache.set(subChatId, groups)
+    return groups
+  })
+)
+
+// Per-subChat assistant IDs for a user message (for split view)
+// Key format: "subChatId:userMsgId"
+const assistantIdsPerChatCache = new Map<string, string[]>()
+export const assistantIdsPerChatAtomFamily = atomFamily((key: string) => {
+  const sepIdx = key.indexOf(":")
+  const subChatId = key.slice(0, sepIdx)
+  const userMsgId = key.slice(sepIdx + 1)
+  return atom((get) => {
+    const groups = get(messageGroupsPerChatAtom(subChatId))
+    const group = groups.find((g) => g.userMsgId === userMsgId)
+    const newIds = group?.assistantMsgIds ?? []
+    const cached = assistantIdsPerChatCache.get(key)
+    if (cached && cached.length === newIds.length && cached.every((id, i) => id === newIds[i])) {
+      return cached
+    }
+    assistantIdsPerChatCache.set(key, newIds)
+    return newIds
+  })
+})
+
+// Per-subChat isLastUserMessage (for split view)
+export const isLastUserMessagePerChatAtomFamily = atomFamily((key: string) => {
+  const sepIdx = key.indexOf(":")
+  const subChatId = key.slice(0, sepIdx)
+  const userMsgId = key.slice(sepIdx + 1)
+  return atom((get) => {
+    const userIds = get(userMessageIdsPerChatAtom(subChatId))
+    return userIds[userIds.length - 1] === userMsgId
+  })
+})
+
+// Per-subChat rollback target (for split view)
+export const rollbackTargetPerChatAtomFamily = atomFamily((key: string) => {
+  const sepIdx = key.indexOf(":")
+  const subChatId = key.slice(0, sepIdx)
+  const userMsgId = key.slice(sepIdx + 1)
+  return atom((get) => {
+    const ids = get(messageIdsPerChatAtom(subChatId))
+    const roles = get(messageRolesPerChatAtom(subChatId))
+    const userMsgIndex = ids.indexOf(userMsgId)
+    if (userMsgIndex <= 0) return null
+    return findRollbackTargetSdkUuidForUserIndex(userMsgIndex, ids.length, (index) => {
+      const messageId = ids[index]
+      if (!messageId) return null
+      const role = roles.get(messageId)
+      if (!role) return null
+      if (role !== "assistant") return { role: role as "user" | "assistant" | "system" }
+      return get(messageAtomFamily(messageId))
+    })
+  })
+})
+
 // ============================================================================
 // ASSISTANT IDS FOR USER MESSAGE - For IsolatedMessageGroup
 // ============================================================================
@@ -348,6 +490,86 @@ export const isLastUserMessageAtomFamily = atomFamily((userMsgId: string) =>
   atom((get) => {
     const userIds = get(userMessageIdsAtom)
     return userIds[userIds.length - 1] === userMsgId
+  })
+)
+
+// Is this user message the first one? (used to hide rollback button on first message)
+export const isFirstUserMessageAtomFamily = atomFamily((userMsgId: string) =>
+  atom((get) => {
+    const userIds = get(userMessageIdsAtom)
+    return userIds[0] === userMsgId
+  })
+)
+
+type RollbackLookupMessage = {
+  role: "user" | "assistant" | "system"
+  metadata?: any
+  parts?: MessagePart[]
+}
+
+function hasCompactToolUsePart(parts?: MessagePart[]): boolean {
+  return !!parts?.some((part) => part.type === "tool-Compact")
+}
+
+// Shared rollback target lookup used by both UI visibility and rollback action.
+export function findRollbackTargetSdkUuidForUserIndex(
+  userMsgIndex: number,
+  totalMessageCount: number,
+  getMessageAt: (index: number) => RollbackLookupMessage | null | undefined,
+): string | null {
+  if (userMsgIndex <= 0 || totalMessageCount <= 0) return null
+
+  // 1) Pick the first assistant before this user message.
+  let targetAssistantIndex = -1
+  let targetAssistantMessage: RollbackLookupMessage | null | undefined = null
+  for (let i = userMsgIndex - 1; i >= 0; i--) {
+    const message = getMessageAt(i)
+    if (!message || message.role !== "assistant") continue
+    targetAssistantIndex = i
+    targetAssistantMessage = message
+    break
+  }
+
+  if (targetAssistantIndex === -1 || !targetAssistantMessage) return null
+
+  // 2) Any compact after that assistant (up to the end of the dialog) means
+  // this assistant is already behind compact and cannot be a rollback target.
+  for (let i = targetAssistantIndex; i < totalMessageCount; i++) {
+    const message = getMessageAt(i)
+    if (!message || message.role !== "assistant") continue
+    if (hasCompactToolUsePart(message.parts)) {
+      return null
+    }
+  }
+
+  // 3) No compact after target assistant: allow rollback only if target has SDK UUID.
+  const sdkUuid = (targetAssistantMessage.metadata as any)?.sdkMessageUuid
+  return typeof sdkUuid === "string" && sdkUuid.length > 0 ? sdkUuid : null
+}
+
+// SDK UUID of the assistant message that rollback should target for this user message.
+// Returns null when this turn cannot be rolled back.
+export const rollbackTargetSdkUuidForUserMsgAtomFamily = atomFamily((userMsgId: string) =>
+  atom((get) => {
+    const ids = get(messageIdsAtom)
+    const roles = get(messageRolesAtom)
+    const userMsgIndex = ids.indexOf(userMsgId)
+
+    if (userMsgIndex <= 0) return null
+
+    return findRollbackTargetSdkUuidForUserIndex(userMsgIndex, ids.length, (index) => {
+      const messageId = ids[index]
+      if (!messageId) return null
+
+      const role = roles.get(messageId)
+      if (!role) return null
+
+      if (role !== "assistant") {
+        return { role }
+      }
+
+      return get(messageAtomFamily(messageId))
+    })
   })
 )
 
@@ -440,8 +662,11 @@ type TokenData = {
   reasoningTokens: number
   totalTokens: number
   messageCount: number
+  totalMessageCount: number
   // Track last message's output tokens to detect when streaming completes
   lastMsgOutputTokens: number
+  // Track last message parts signature to detect compact boundary updates
+  lastMsgPartsKey: string
 }
 const tokenDataCacheByChat = new Map<string, TokenData>()
 
@@ -454,6 +679,9 @@ export const messageTokenDataAtom = atom((get) => {
   const lastMsg = lastId ? get(messageAtomFamily(lastId)) : null
   // Note: metadata has flat structure (metadata.outputTokens), not nested (metadata.usage.outputTokens)
   const lastMsgOutputTokens = (lastMsg?.metadata as any)?.outputTokens || 0
+  const lastMsgParts = (lastMsg as any)?.parts as Array<{ type?: string; state?: string }> | undefined
+  const lastPart = lastMsgParts?.[lastMsgParts.length - 1]
+  const lastMsgPartsKey = `${lastMsgParts?.length ?? 0}:${lastPart?.type ?? ""}:${(lastPart as any)?.state ?? ""}`
 
   const cached = tokenDataCacheByChat.get(subChatId)
 
@@ -462,21 +690,37 @@ export const messageTokenDataAtom = atom((get) => {
   // 2. Last message's output tokens haven't changed (detects streaming completion)
   if (
     cached &&
-    ids.length === cached.messageCount &&
-    lastMsgOutputTokens === cached.lastMsgOutputTokens
+    ids.length === cached.totalMessageCount &&
+    lastMsgOutputTokens === cached.lastMsgOutputTokens &&
+    lastMsgPartsKey === cached.lastMsgPartsKey
   ) {
     return cached
   }
 
-  // Recalculate token data
+  // Recalculate token data (since last completed compact boundary)
+  let startIndex = 0
+  for (let i = 0; i < ids.length; i++) {
+    const msg = get(messageAtomFamily(ids[i]))
+    const parts = (msg as any)?.parts as Array<{ type?: string; state?: string }> | undefined
+    if (
+      parts?.some(
+        (part) =>
+          part.type === "tool-Compact" &&
+          (part.state === "output-available" || part.state === "result"),
+      )
+    ) {
+      // Include the compact result itself in the token window
+      startIndex = i
+    }
+  }
+
   let inputTokens = 0
   let outputTokens = 0
   let cacheReadTokens = 0
   let cacheWriteTokens = 0
   let reasoningTokens = 0
-
-  for (const id of ids) {
-    const msg = get(messageAtomFamily(id))
+  for (let i = startIndex; i < ids.length; i++) {
+    const msg = get(messageAtomFamily(ids[i]))
     const metadata = msg?.metadata as any
     // Note: metadata has flat structure from transform.ts (metadata.inputTokens, metadata.outputTokens)
     // Extended fields like cacheReadInputTokens are not currently in MessageMetadata type
@@ -489,6 +733,7 @@ export const messageTokenDataAtom = atom((get) => {
       reasoningTokens += metadata.reasoningTokens || 0
     }
   }
+  const messageCount = Math.max(0, ids.length - startIndex)
 
   const newTokenData: TokenData = {
     inputTokens,
@@ -497,8 +742,10 @@ export const messageTokenDataAtom = atom((get) => {
     cacheWriteTokens,
     reasoningTokens,
     totalTokens: inputTokens + outputTokens,
-    messageCount: ids.length,
+    messageCount,
+    totalMessageCount: ids.length,
     lastMsgOutputTokens,
+    lastMsgPartsKey,
   }
 
   tokenDataCacheByChat.set(subChatId, newTokenData)
@@ -622,6 +869,18 @@ export const syncMessagesWithStatusAtom = atom(
       set(messageRolesAtom, newRoles)
     }
 
+    // Also update per-subChat atoms (for split view support)
+    if (subChatId) {
+      const prevPCIds = get(messageIdsPerChatAtom(subChatId))
+      if (newIds.length !== prevPCIds.length || newIds.some((id, i) => id !== prevPCIds[i])) {
+        set(messageIdsPerChatAtom(subChatId), newIds)
+      }
+      const prevPCRoles = get(messageRolesPerChatAtom(subChatId))
+      if (newRoles.size !== prevPCRoles.size || [...newRoles].some(([id, role]) => prevPCRoles.get(id) !== role)) {
+        set(messageRolesPerChatAtom(subChatId), newRoles)
+      }
+    }
+
     // Update individual message atoms ONLY if they changed
     // This is the key optimization - only changed messages trigger re-renders
     // CRITICAL: AI SDK mutates objects in-place, so we MUST create a new reference
@@ -630,12 +889,16 @@ export const syncMessagesWithStatusAtom = atom(
     // 1. msg object itself is mutated in-place
     // 2. msg.parts array is mutated in-place
     // 3. Individual part objects inside parts are mutated in-place
+    const lastMessageId = newIds[newIds.length - 1] ?? null
     for (const msg of messages) {
       const currentAtomValue = get(messageAtomFamily(msg.id))
       const msgChanged = hasMessageChanged(currentSubChatId, msg.id, msg)
+      const isLastMessage = msg.id === lastMessageId
 
       // CRITICAL FIX: Also update if atom is null (not yet populated)
-      if (msgChanged || !currentAtomValue) {
+      // Always refresh the last message because AI SDK can mutate non-last parts
+      // of the current streaming assistant message without changing the last part.
+      if (msgChanged || !currentAtomValue || isLastMessage) {
         // Deep clone message with new parts array and new part objects
         const clonedMsg = {
           ...msg,
@@ -701,6 +964,12 @@ export function clearSubChatCaches(subChatId: string) {
   messageGroupsCacheByChat.delete(subChatId)
   lastAssistantCacheByChat.delete(subChatId)
   tokenDataCacheByChat.delete(subChatId)
+
+  // Clear per-subChat atom families
+  messageIdsPerChatAtom.remove(subChatId)
+  messageRolesPerChatAtom.remove(subChatId)
+  userMessageIdsPerChatCache.delete(subChatId)
+  messageGroupsPerChatCache.delete(subChatId)
 }
 
 // Clear all caches (call on app reset/logout)

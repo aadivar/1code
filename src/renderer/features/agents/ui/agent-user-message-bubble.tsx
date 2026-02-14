@@ -190,15 +190,19 @@ export const AgentUserMessageBubble = memo(function AgentUserMessageBubble({
         <div className="space-y-2 w-full">
           {/* Show attached images from stored message */}
           {imageParts.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
               {(() => {
                 // Build allImages array for gallery navigation
+                const resolveImgUrl = (img: any) =>
+                  img.data?.base64Data && img.data?.mediaType
+                    ? `data:${img.data.mediaType};base64,${img.data.base64Data}`
+                    : img.data?.url || ""
                 const allImages = imageParts
-                  .filter((img) => img.data?.url)
+                  .filter((img) => img.data?.url || img.data?.base64Data)
                   .map((img, idx) => ({
                     id: `${messageId}-img-${idx}`,
                     filename: img.data?.filename || "image",
-                    url: img.data?.url || "",
+                    url: resolveImgUrl(img),
                   }))
 
                 return imageParts.map((img, idx) => (
@@ -206,7 +210,7 @@ export const AgentUserMessageBubble = memo(function AgentUserMessageBubble({
                     key={`${messageId}-img-${idx}`}
                     id={`${messageId}-img-${idx}`}
                     filename={img.data?.filename || "image"}
-                    url={img.data?.url || ""}
+                    url={resolveImgUrl(img)}
                     allImages={allImages}
                     imageIndex={idx}
                   />
@@ -252,11 +256,15 @@ export const AgentUserMessageBubble = memo(function AgentUserMessageBubble({
                 }
 
                 // Count text mentions by type
-                const quoteCount = textMentions.filter(m => m.type === "quote" || m.type === "pasted").length
+                const quoteCount = textMentions.filter(m => m.type === "quote").length
+                const pastedCount = textMentions.filter(m => m.type === "pasted").length
                 const codeCount = textMentions.filter(m => m.type === "diff").length
 
                 if (quoteCount > 0) {
                   parts.push(quoteCount === 1 ? "selected text" : `${quoteCount} text selections`)
+                }
+                if (pastedCount > 0) {
+                  parts.push(pastedCount === 1 ? "pasted text" : `${pastedCount} pasted texts`)
                 }
                 if (codeCount > 0) {
                   parts.push(codeCount === 1 ? "code selection" : `${codeCount} code selections`)

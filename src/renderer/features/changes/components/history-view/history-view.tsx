@@ -13,6 +13,8 @@ import {
 	ContextMenuTrigger,
 } from "../../../../components/ui/context-menu";
 import { toast } from "sonner";
+import { useAtomValue } from "jotai";
+import { selectedProjectAtom } from "../../../agents/atoms";
 
 export interface CommitInfo {
 	hash: string;
@@ -21,6 +23,7 @@ export interface CommitInfo {
 	author: string;
 	email: string;
 	date: Date;
+	tags?: string[];
 }
 
 interface HistoryViewProps {
@@ -170,16 +173,24 @@ const HistoryCommitItem = memo(function HistoryCommitItem({
 		[commit.date],
 	);
 
+	const selectedProject = useAtomValue(selectedProjectAtom);
+
 	const handleCopySha = useCallback(() => {
 		navigator.clipboard.writeText(commit.hash);
 		toast.success("Copied SHA to clipboard");
 	}, [commit.hash]);
 
 	const handleOpenOnRemote = useCallback(() => {
-		// TODO: Get repository URL and construct commit URL
-		// For now, just show a toast
-		toast.info("Open on remote - not implemented yet");
-	}, []);
+		const owner = selectedProject?.gitOwner;
+		const repo = selectedProject?.gitRepo;
+		if (!owner || !repo) {
+			toast.error("Could not determine remote repository");
+			return;
+		}
+		window.desktopApi.openExternal(
+			`https://github.com/${owner}/${repo}/commit/${commit.hash}`,
+		);
+	}, [commit.hash, selectedProject?.gitOwner, selectedProject?.gitRepo]);
 
 	return (
 		<ContextMenu>
@@ -193,7 +204,17 @@ const HistoryCommitItem = memo(function HistoryCommitItem({
 					onClick={onClick}
 				>
 					<div className="flex-1 min-w-0">
-						<div className="text-xs font-medium truncate">{commit.message}</div>
+						<div className="text-xs font-medium truncate flex items-center gap-1.5">
+							<span className="truncate">{commit.message}</span>
+							{commit.tags?.map((tag) => (
+								<span
+									key={tag}
+									className="inline-flex items-center text-[10px] bg-primary/15 text-primary px-1.5 py-0.5 rounded font-medium shrink-0"
+								>
+									{tag}
+								</span>
+							))}
+						</div>
 						<div className="text-xs text-muted-foreground flex items-center gap-1">
 							<span className="font-mono">{commit.shortHash}</span>
 							<span>·</span>

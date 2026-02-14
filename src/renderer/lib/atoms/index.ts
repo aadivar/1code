@@ -364,7 +364,7 @@ export const activeConfigAtom = atom((get) => {
 // Note: Extended thinking disables response streaming
 export const extendedThinkingEnabledAtom = atomWithStorage<boolean>(
   "preferences:extended-thinking-enabled",
-  false,
+  true,
   undefined,
   { getOnInit: true },
 )
@@ -373,7 +373,7 @@ export const extendedThinkingEnabledAtom = atomWithStorage<boolean>(
 // When enabled, allow rollback to previous assistant messages
 export const historyEnabledAtom = atomWithStorage<boolean>(
   "preferences:history-enabled",
-  false,
+  false, // Default OFF — beta feature
   undefined,
   { getOnInit: true },
 )
@@ -392,6 +392,16 @@ export const soundNotificationsEnabledAtom = atomWithStorage<boolean>(
 export const desktopNotificationsEnabledAtom = atomWithStorage<boolean>(
   "preferences:desktop-notifications-enabled",
   true,
+  undefined,
+  { getOnInit: true },
+)
+
+// Preferences - Notify When Focused
+// When enabled, show desktop notifications even when the app window is focused
+// (e.g. when working in a different chat). When disabled, only notify when the app is in the background.
+export const notifyWhenFocusedAtom = atomWithStorage<boolean>(
+  "preferences:notify-when-focused",
+  false,
   undefined,
   { getOnInit: true },
 )
@@ -435,11 +445,11 @@ export const betaGitFeaturesEnabledAtom = atomWithStorage<boolean>(
   { getOnInit: true },
 )
 
-// Beta: Enable Kanban board view
+// Kanban board view
 // When enabled, shows Kanban button in sidebar to view workspaces as a board
 export const betaKanbanEnabledAtom = atomWithStorage<boolean>(
   "preferences:beta-kanban-enabled",
-  false, // Default OFF
+  true, // Default ON — graduated from beta
   undefined,
   { getOnInit: true },
 )

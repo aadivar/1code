@@ -68,7 +68,7 @@ export function getWindowId(): string {
  * Get initial window params (chatId, subChatId) passed when opening a new window.
  * These are one-time use - cleared from sessionStorage after first read.
  */
-export function getInitialWindowParams(): { chatId?: string; subChatId?: string } {
+export function getInitialWindowParams(): { chatId?: string; subChatId?: string; splitPaneIds?: string[] } {
   // Check if already consumed
   const consumed = sessionStorage.getItem("windowParamsConsumed")
   if (consumed) return {}
@@ -77,12 +77,14 @@ export function getInitialWindowParams(): { chatId?: string; subChatId?: string 
   const urlParams = new URLSearchParams(window.location.search)
   let chatId = urlParams.get("chatId")
   let subChatId = urlParams.get("subChatId")
+  let rawSplitPaneIds = urlParams.get("splitPaneIds")
 
   // Try hash params (production file:// URLs)
   if (!chatId && window.location.hash) {
     const hashParams = new URLSearchParams(window.location.hash.slice(1))
     chatId = hashParams.get("chatId")
     subChatId = hashParams.get("subChatId")
+    rawSplitPaneIds = rawSplitPaneIds || hashParams.get("splitPaneIds")
   }
 
   // Mark as consumed so we don't re-apply on hot reload
@@ -90,8 +92,14 @@ export function getInitialWindowParams(): { chatId?: string; subChatId?: string 
     sessionStorage.setItem("windowParamsConsumed", "true")
   }
 
+  let splitPaneIds: string[] | undefined
+  if (rawSplitPaneIds) {
+    try { splitPaneIds = JSON.parse(rawSplitPaneIds) } catch {}
+  }
+
   return {
     chatId: chatId || undefined,
     subChatId: subChatId || undefined,
+    splitPaneIds,
   }
 }
