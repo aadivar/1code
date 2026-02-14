@@ -10,7 +10,7 @@ This guide explains how to set up your own fork with automatic builds and auto-u
 │ (21st-dev/1code)│     │  (auto-synced)  │     │  (with builds)  │
 └─────────────────┘     └─────────────────┘     └─────────────────┘
         │                       │                       │
-        │   every 30 min        │   on push             │
+        │   every 6 hours       │   on push             │
         └───────────────────────┴───────────────────────┘
                                                         │
                                                         ▼
@@ -34,6 +34,7 @@ After forking:
 2. Under "Actions permissions", select "Allow all actions"
 3. Under "Workflow permissions", select "Read and write permissions"
 4. Click Save
+5. If your `main` branch is protected, allow GitHub Actions to bypass it or disable "Require a pull request before merging" (auto-sync pushes directly to `main`)
 
 ## Step 3: Initial Build
 
@@ -93,7 +94,7 @@ Install the app from `release/1Code-*.dmg`.
 
 The `sync-fork.yml` workflow:
 
-1. **Runs every 30 minutes** (configurable in cron)
+1. **Runs every 6 hours** (configurable in cron)
 2. Fetches upstream `main` branch
 3. Merges changes into your fork
 4. If changes detected → triggers build workflow
@@ -101,7 +102,7 @@ The `sync-fork.yml` workflow:
 ### Manual Sync
 
 You can also manually trigger a sync:
-1. Go to Actions → "Sync Fork with Upstream"
+1. Go to Actions → "Sync Fork on Upstream Release"
 2. Click "Run workflow"
 3. Optionally check "Force build" to rebuild even without changes
 
@@ -210,7 +211,7 @@ If the sync workflow fails due to merge conflicts:
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
-| `sync-fork.yml` | Cron (30 min), manual | Sync with upstream |
+| `sync-fork.yml` | Cron (every 6 hours), manual | Sync with upstream |
 | `build-release.yml` | Push to main, manual, after sync | Build and release |
 
 | Config File | Location | Purpose |

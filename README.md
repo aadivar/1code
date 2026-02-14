@@ -28,6 +28,7 @@ In your fork:
 2. Select "Allow all actions and reusable workflows"
 3. Under "Workflow permissions", select "Read and write permissions"
 4. Click **Save**
+5. If your `main` branch is protected, allow GitHub Actions to bypass it or disable "Require a pull request before merging" for this fork (auto-sync pushes directly to `main`)
 
 ### 3. Trigger the first build
 

@@ -39,6 +39,12 @@ jobs:
 
       - name: Download Claude Code binaries
         run: bun run claude:download:all
+        continue-on-error: true
+
+      - name: Ensure Claude binary directories exist
+        run: |
+          mkdir -p resources/bin/darwin-arm64
+          mkdir -p resources/bin/darwin-x64
 
       - name: Build app
         run: bun run build
