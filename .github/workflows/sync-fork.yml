@@ -101,6 +101,6 @@ jobs:
 
   trigger-build:
     needs: [check-release, sync-and-build]
-    if: needs.check-release.outputs.has_new_release == 'true'
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.force_build == 'true' && needs.sync-and-build.result == 'success'
     uses: ./.github/workflows/build-release.yml
     secrets: inherit
