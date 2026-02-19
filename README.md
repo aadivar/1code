@@ -2,7 +2,7 @@
 
 > **This is a community fork of [21st-dev/1code](https://github.com/21st-dev/1code) with automatic sync and build capabilities.**
 
-Fork this repo to get **automatic builds** whenever upstream releases a new version — no manual rebuilding required.
+Fork this repo to get **automatic builds** whenever upstream `main` changes — no manual rebuilding required.
 
 ## Why This Fork?
 
@@ -10,7 +10,7 @@ The official 1Code repo requires you to manually build the app every time there'
 
 | Feature | Official Repo | This Fork |
 |---------|---------------|-----------|
-| Auto-sync with upstream | ❌ | ✅ On new release |
+| Auto-sync with upstream | ❌ | ✅ On upstream commits |
 | Auto-build on changes | ❌ | ✅ GitHub Actions |
 | Auto-update in app | ❌ CDN only | ✅ From your fork's releases |
 | Manual builds needed | ✅ Every update | ❌ Never |
@@ -68,13 +68,13 @@ Or manually create `~/Library/Application Support/1Code/update-config.json`:
 ```
 ┌─────────────────────┐
 │  21st-dev/1code     │ (upstream)
-│  creates a release  │
+│  pushes new commits │
 └──────────┬──────────┘
            │ checked every 6 hours
            ▼
 ┌─────────────────────┐
-│  New release?       │
-│  (compares versions)│
+│ New upstream commits│
+│      to sync?       │
 └──────────┬──────────┘
            │ yes → sync & build
            ▼
@@ -100,12 +100,12 @@ Or manually create `~/Library/Application Support/1Code/update-config.json`:
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
-| `sync-fork.yml` | Every 6 hours | Checks for new upstream releases, syncs if found |
+| `sync-fork.yml` | Every 6 hours | Checks for upstream `main` commits, syncs if needed |
 | `build-release.yml` | On push to main | Builds app and creates GitHub Release |
 
 ### Version Tracking
 
-The file `.last-synced-version` tracks which upstream release you've synced to. The workflow only triggers a build when upstream has a newer release.
+The file `.last-synced-version` tracks the latest upstream `main` commit SHA that was synced.
 
 ## Customization
 

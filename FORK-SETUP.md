@@ -102,7 +102,7 @@ The `sync-fork.yml` workflow:
 ### Manual Sync
 
 You can also manually trigger a sync:
-1. Go to Actions → "Sync Fork on Upstream Release"
+1. Go to Actions → "Sync Fork with Upstream Main"
 2. Click "Run workflow"
 3. Optionally check "Force build" to rebuild even without changes
 

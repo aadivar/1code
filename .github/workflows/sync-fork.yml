@@ -1,62 +1,54 @@
-name: Sync Fork on Upstream Release
+name: Sync Fork with Upstream Main
 
 on:
   schedule:
-    # Check for new releases every 6 hours
+    # Check upstream main every 6 hours
     - cron: "0 */6 * * *"
   workflow_dispatch:
     inputs:
       force_build:
-        description: "Force build even if no new release"
+        description: "Force build even if no upstream changes"
         type: boolean
         default: false
 
 jobs:
-  check-release:
+  check-upstream:
     runs-on: ubuntu-latest
     outputs:
-      has_new_release: ${{ steps.check.outputs.has_new_release }}
-      latest_version: ${{ steps.check.outputs.latest_version }}
+      has_upstream_changes: ${{ steps.check.outputs.has_upstream_changes }}
+      latest_upstream_sha: ${{ steps.check.outputs.latest_upstream_sha }}
 
     steps:
       - name: Checkout fork
         uses: actions/checkout@v4
 
-      - name: Check for new upstream release
+      - name: Check upstream main for new commits
         id: check
         run: |
-          # Get latest release from upstream
-          LATEST=$(curl -s https://api.github.com/repos/21st-dev/1code/releases/latest | jq -r '.tag_name // empty')
+          git remote add upstream https://github.com/21st-dev/1code.git || true
+          git fetch --no-tags upstream main
 
-          if [ -z "$LATEST" ]; then
-            echo "No releases found upstream"
-            echo "has_new_release=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
+          UPSTREAM_SHA=$(git rev-parse upstream/main)
+          CURRENT_SHA=$(git rev-parse HEAD)
 
-          echo "Upstream latest release: $LATEST"
+          echo "Upstream main SHA: $UPSTREAM_SHA"
+          echo "Current fork SHA: $CURRENT_SHA"
+          echo "latest_upstream_sha=$UPSTREAM_SHA" >> $GITHUB_OUTPUT
 
-          # Get our last synced version (stored in a file)
-          CURRENT=""
-          if [ -f ".last-synced-version" ]; then
-            CURRENT=$(cat .last-synced-version)
-          fi
-
-          echo "Our last synced version: $CURRENT"
-          echo "latest_version=$LATEST" >> $GITHUB_OUTPUT
-
-          # Check if we need to sync
-          if [ "$LATEST" != "$CURRENT" ] || [ "${{ github.event.inputs.force_build }}" == "true" ]; then
-            echo "New release detected or force build requested"
-            echo "has_new_release=true" >> $GITHUB_OUTPUT
+          if [ "${{ github.event.inputs.force_build }}" == "true" ]; then
+            echo "Force build requested"
+            echo "has_upstream_changes=true" >> $GITHUB_OUTPUT
+          elif git merge-base --is-ancestor "$UPSTREAM_SHA" "$CURRENT_SHA"; then
+            echo "Already up to date with upstream/main"
+            echo "has_upstream_changes=false" >> $GITHUB_OUTPUT
           else
-            echo "Already up to date"
-            echo "has_new_release=false" >> $GITHUB_OUTPUT
+            echo "Upstream has new commits to sync"
+            echo "has_upstream_changes=true" >> $GITHUB_OUTPUT
           fi
 
   sync-and-build:
-    needs: check-release
-    if: needs.check-release.outputs.has_new_release == 'true'
+    needs: check-upstream
+    if: needs.check-upstream.outputs.has_upstream_changes == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -91,16 +83,16 @@ jobs:
       - name: Update last synced version
         if: steps.sync.outputs.sync_success == 'true'
         run: |
-          echo "${{ needs.check-release.outputs.latest_version }}" > .last-synced-version
+          echo "${{ needs.check-upstream.outputs.latest_upstream_sha }}" > .last-synced-version
           git add .last-synced-version
-          git commit -m "Sync with upstream ${{ needs.check-release.outputs.latest_version }}" || true
+          git commit -m "Sync with upstream ${{ needs.check-upstream.outputs.latest_upstream_sha }}" || true
 
       - name: Push changes
         if: steps.sync.outputs.sync_success == 'true'
         run: git push origin main
 
   trigger-build:
-    needs: [check-release, sync-and-build]
+    needs: [check-upstream, sync-and-build]
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.force_build == 'true' && needs.sync-and-build.result == 'success'
     uses: ./.github/workflows/build-release.yml
     secrets: inherit
