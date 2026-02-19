@@ -1,12 +1,6 @@
 name: Build and Release
 
 on:
-  push:
-    branches:
-      - main
-    paths-ignore:
-      - "**.md"
-      - ".github/workflows/sync-fork.yml"
   workflow_dispatch:
   workflow_call:
 

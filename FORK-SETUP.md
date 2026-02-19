@@ -97,7 +97,7 @@ The `sync-fork.yml` workflow:
 1. **Runs every 6 hours** (configurable in cron)
 2. Fetches upstream `main` branch
 3. Merges changes into your fork
-4. If changes detected → triggers build workflow
+4. If upstream release tag changed → triggers build workflow
 
 ### Manual Sync
 
@@ -211,8 +211,8 @@ If the sync workflow fails due to merge conflicts:
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
-| `sync-fork.yml` | Cron (every 6 hours), manual | Sync with upstream |
-| `build-release.yml` | Push to main, manual, after sync | Build and release |
+| `sync-fork.yml` | Cron (every 6 hours), manual | Sync with upstream `main`; trigger release on new upstream tag |
+| `build-release.yml` | Manual or from `sync-fork.yml` | Build and release |
 
 | Config File | Location | Purpose |
 |-------------|----------|---------|

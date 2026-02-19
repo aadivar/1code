@@ -17,6 +17,8 @@ jobs:
     outputs:
       has_upstream_changes: ${{ steps.check.outputs.has_upstream_changes }}
       latest_upstream_sha: ${{ steps.check.outputs.latest_upstream_sha }}
+      should_release: ${{ steps.check.outputs.should_release }}
+      latest_release_tag: ${{ steps.check.outputs.latest_release_tag }}
 
     steps:
       - name: Checkout fork
@@ -35,21 +37,50 @@ jobs:
           echo "Current fork SHA: $CURRENT_SHA"
           echo "latest_upstream_sha=$UPSTREAM_SHA" >> $GITHUB_OUTPUT
 
+          LATEST_TAG=$(curl -s https://api.github.com/repos/21st-dev/1code/releases/latest | jq -r '.tag_name // empty')
+          CURRENT_TAG=""
+          if [ -f ".last-released-upstream-tag" ]; then
+            CURRENT_TAG=$(cat .last-released-upstream-tag)
+          fi
+
+          echo "Upstream latest release tag: ${LATEST_TAG:-<none>}"
+          echo "Last released upstream tag in fork: ${CURRENT_TAG:-<none>}"
+          echo "latest_release_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+
           if [ "${{ github.event.inputs.force_build }}" == "true" ]; then
             echo "Force build requested"
             echo "has_upstream_changes=true" >> $GITHUB_OUTPUT
+            echo "should_release=true" >> $GITHUB_OUTPUT
           elif git merge-base --is-ancestor "$UPSTREAM_SHA" "$CURRENT_SHA"; then
             echo "Already up to date with upstream/main"
             echo "has_upstream_changes=false" >> $GITHUB_OUTPUT
+
+            if [ -n "$LATEST_TAG" ] && [ "$LATEST_TAG" != "$CURRENT_TAG" ]; then
+              echo "New upstream release tag detected"
+              echo "should_release=true" >> $GITHUB_OUTPUT
+            else
+              echo "No new upstream release tag"
+              echo "should_release=false" >> $GITHUB_OUTPUT
+            fi
           else
             echo "Upstream has new commits to sync"
             echo "has_upstream_changes=true" >> $GITHUB_OUTPUT
+
+            if [ -n "$LATEST_TAG" ] && [ "$LATEST_TAG" != "$CURRENT_TAG" ]; then
+              echo "New upstream release tag detected"
+              echo "should_release=true" >> $GITHUB_OUTPUT
+            else
+              echo "No new upstream release tag"
+              echo "should_release=false" >> $GITHUB_OUTPUT
+            fi
           fi
 
   sync-and-build:
     needs: check-upstream
     if: needs.check-upstream.outputs.has_upstream_changes == 'true'
     runs-on: ubuntu-latest
+    outputs:
+      sync_success: ${{ steps.sync.outputs.sync_success }}
 
     steps:
       - name: Checkout fork
@@ -93,6 +124,31 @@ jobs:
 
   trigger-build:
     needs: [check-upstream, sync-and-build]
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.force_build == 'true' && needs.sync-and-build.result == 'success'
+    if: needs.check-upstream.outputs.should_release == 'true' && (needs['sync-and-build'].result == 'skipped' || needs['sync-and-build'].outputs.sync_success == 'true')
     uses: ./.github/workflows/build-release.yml
     secrets: inherit
+
+  mark-release-tag:
+    needs: [check-upstream, trigger-build]
+    if: needs.trigger-build.result == 'success' && needs.check-upstream.outputs.latest_release_tag != ''
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Update last released upstream tag marker
+        run: |
+          echo "${{ needs.check-upstream.outputs.latest_release_tag }}" > .last-released-upstream-tag
+          git add .last-released-upstream-tag
+          git commit -m "Mark upstream release ${{ needs.check-upstream.outputs.latest_release_tag }} as built" || true
+
+      - name: Push tag marker
+        run: git push origin main
