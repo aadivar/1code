@@ -5,9 +5,38 @@ import { X } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { trpc } from "@/lib/trpc"
 import { Input } from "@/components/ui/input"
-import { SearchIcon, FilesIcon } from "@/components/ui/icons"
+import { SearchIcon } from "@/components/ui/icons"
+import { UnknownFileIcon } from "@/icons/framework-icons"
 import { getFileIconByExtension } from "../../agents/mentions/agents-file-mention"
 import { recentlyOpenedFilesAtom } from "../../agents/atoms"
+
+// ============================================================================
+// Highlight helper – splits text into segments with matching parts marked
+// ============================================================================
+
+function highlightMatches(
+  text: string,
+  query: string,
+): Array<{ text: string; highlight: boolean }> {
+  if (!query) return [{ text, highlight: false }]
+  const lower = text.toLowerCase()
+  const qLower = query.toLowerCase()
+  const segments: Array<{ text: string; highlight: boolean }> = []
+  let cursor = 0
+  while (cursor < text.length) {
+    const idx = lower.indexOf(qLower, cursor)
+    if (idx === -1) {
+      segments.push({ text: text.slice(cursor), highlight: false })
+      break
+    }
+    if (idx > cursor) {
+      segments.push({ text: text.slice(cursor, idx), highlight: false })
+    }
+    segments.push({ text: text.slice(idx, idx + query.length), highlight: true })
+    cursor = idx + query.length
+  }
+  return segments
+}
 
 interface FileSearchDialogProps {
   open: boolean
@@ -214,6 +243,7 @@ export const FileSearchDialog = memo(function FileSearchDialog({
                       isSelected={i === selectedIndex}
                       onSelect={() => handleSelect(item.path)}
                       setRef={handleSetRef}
+                      query={debouncedQuery}
                       recentLabel="recently opened"
                       onRemoveRecent={() => handleRemoveRecent(item.path)}
                     />
@@ -237,6 +267,7 @@ export const FileSearchDialog = memo(function FileSearchDialog({
                           isSelected={flatIndex === selectedIndex}
                           onSelect={() => handleSelect(item.path)}
                           setRef={handleSetRef}
+                          query={debouncedQuery}
                         />
                       )
                     })}
@@ -258,6 +289,7 @@ interface FileSearchItemProps {
   isSelected: boolean
   onSelect: () => void
   setRef: (index: number, el: HTMLDivElement | null) => void
+  query?: string
   recentLabel?: string
   onRemoveRecent?: () => void
 }
@@ -269,6 +301,7 @@ const FileSearchItem = memo(function FileSearchItem({
   isSelected,
   onSelect,
   setRef,
+  query,
   recentLabel,
   onRemoveRecent,
 }: FileSearchItemProps) {
@@ -287,7 +320,7 @@ const FileSearchItem = memo(function FileSearchItem({
     [onRemoveRecent],
   )
 
-  const Icon = getFileIconByExtension(label) ?? FilesIcon
+  const Icon = getFileIconByExtension(label) ?? UnknownFileIcon
 
   return (
     <div
@@ -305,7 +338,15 @@ const FileSearchItem = memo(function FileSearchItem({
       <Icon className="h-4 w-4 text-muted-foreground flex-shrink-0" />
       <span className="flex items-center gap-1.5 w-full min-w-0">
         <span className="shrink-0 whitespace-nowrap">
-          {label}
+          {query
+            ? highlightMatches(label, query).map((seg, i) =>
+                seg.highlight ? (
+                  <mark key={i} className="bg-transparent text-foreground font-semibold">{seg.text}</mark>
+                ) : (
+                  <span key={i}>{seg.text}</span>
+                ),
+              )
+            : label}
         </span>
         {dirPath && (
           <span
@@ -317,7 +358,15 @@ const FileSearchItem = memo(function FileSearchItem({
             }}
           >
             <span style={{ direction: "ltr" }}>
-              {dirPath}
+              {query
+                ? highlightMatches(dirPath, query).map((seg, i) =>
+                    seg.highlight ? (
+                      <mark key={i} className="bg-transparent text-foreground font-semibold">{seg.text}</mark>
+                    ) : (
+                      <span key={i}>{seg.text}</span>
+                    ),
+                  )
+                : dirPath}
             </span>
           </span>
         )}

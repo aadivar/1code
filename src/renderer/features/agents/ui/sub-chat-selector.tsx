@@ -24,6 +24,7 @@ import {
   DiffIcon,
   ClockIcon,
   QuestionIcon,
+
 } from "../../../components/ui/icons"
 import { Button } from "../../../components/ui/button"
 import { cn } from "../../../lib/utils"
@@ -196,7 +197,7 @@ export function SubChatSelector({
   chatId,
 }: SubChatSelectorProps) {
   // Use shallow comparison to prevent re-renders when arrays have same content
-  const { activeSubChatId, openSubChatIds, pinnedSubChatIds, allSubChats, parentChatId, togglePinSubChat, splitPaneIds, addToSplit, removeFromSplit, closeSplit } = useAgentSubChatStore(
+  const { activeSubChatId, openSubChatIds, pinnedSubChatIds, allSubChats, parentChatId, togglePinSubChat } = useAgentSubChatStore(
     useShallow((state) => ({
       activeSubChatId: state.activeSubChatId,
       openSubChatIds: state.openSubChatIds,
@@ -204,10 +205,6 @@ export function SubChatSelector({
       allSubChats: state.allSubChats,
       parentChatId: state.chatId,
       togglePinSubChat: state.togglePinSubChat,
-      splitPaneIds: state.splitPaneIds,
-      addToSplit: state.addToSplit,
-      removeFromSplit: state.removeFromSplit,
-      closeSplit: state.closeSplit,
     }))
   )
   const [loadingSubChats] = useAtom(loadingSubChatsAtom)
@@ -239,7 +236,6 @@ export function SubChatSelector({
   const toggleTerminalHotkey = useResolvedHotkeyDisplay("toggle-terminal")
   const archiveAgentHotkey = useResolvedHotkeyDisplay("archive-agent")
   const newAgentHotkey = useResolvedHotkeyDisplay("new-agent")
-  const newAgentSplitHotkey = useResolvedHotkeyDisplay("new-agent-split")
 
   // Pending plan approvals from DB - only for open sub-chats
   const { data: pendingPlanApprovalsData } = trpc.chats.getPendingPlanApprovals.useQuery(
@@ -290,25 +286,8 @@ export function SubChatSelector({
     })
 
     // Unpinned maintain their order from openSubChatIds (user's tab order)
-    const result = [...pinnedChats, ...unpinnedChats]
-
-    // Ensure split pane tabs are always adjacent for visual grouping
-    if (splitPaneIds.length >= 2) {
-      const splitPaneIdSet = new Set(splitPaneIds)
-      const firstSplitIdx = result.findIndex(sc => splitPaneIdSet.has(sc.id))
-      if (firstSplitIdx >= 0) {
-        const splitChats = result.filter(sc => splitPaneIdSet.has(sc.id))
-        const nonSplitChats = result.filter(sc => !splitPaneIdSet.has(sc.id))
-        // Preserve the order from splitPaneIds
-        splitChats.sort((a, b) => splitPaneIds.indexOf(a.id) - splitPaneIds.indexOf(b.id))
-        const insertAt = Math.min(firstSplitIdx, nonSplitChats.length)
-        result.length = 0
-        result.push(...nonSplitChats.slice(0, insertAt), ...splitChats, ...nonSplitChats.slice(insertAt))
-      }
-    }
-
-    return result
-  }, [openSubChatIds, allSubChats, pinnedSubChatIds, splitPaneIds])
+    return [...pinnedChats, ...unpinnedChats]
+  }, [openSubChatIds, allSubChats, pinnedSubChatIds])
 
   const onSwitch = useCallback(
     (subChatId: string) => {
@@ -477,6 +456,7 @@ export function SubChatSelector({
       window.removeEventListener("keydown", handleHistoryHotkey, true)
   }, [subChatsSidebarMode])
 
+  // Keyboard shortcut: Cmd+Shift+T / Ctrl+Shift+T for new sub-chat
   // Scroll to active tab when it changes
   useEffect(() => {
     if (!activeSubChatId || !tabsContainerRef.current) return
@@ -679,13 +659,8 @@ export function SubChatSelector({
         >
           {hasNoChats
             ? null
-            : (() => {
-                const splitPaneIdSet = new Set(splitPaneIds)
-                const isSplitActive = splitPaneIds.length >= 2
-                const isSplitVisible = isSplitActive && splitPaneIds.includes(activeSubChatId ?? "")
-                const tabItems = openSubChats.map((subChat, index) => {
+            : openSubChats.map((subChat, index) => {
                 const isActive = activeSubChatId === subChat.id
-                const isInSplitPair = splitPaneIdSet.has(subChat.id)
                 const isLoading = loadingSubChats.has(subChat.id)
                 const hasUnseen = subChatUnseenChanges.has(subChat.id)
                 const hasTabsToRight = index < openSubChats.length - 1
@@ -697,7 +672,7 @@ export function SubChatSelector({
                 // Check if this chat has a pending plan approval
                 const hasPendingPlan = pendingPlanApprovals.has(subChat.id)
 
-                return { id: subChat.id, element: (
+                return (
                   <ContextMenu key={subChat.id}>
                     <ContextMenuTrigger asChild>
                       <button
@@ -743,13 +718,9 @@ export function SubChatSelector({
                           editingSubChatId === subChat.id
                             ? "overflow-visible px-0"
                             : "overflow-hidden px-1.5 py-0.5 whitespace-nowrap min-w-[50px] gap-1.5",
-                          isInSplitPair && isSplitVisible
-                            ? "bg-muted text-foreground w-[140px]"
-                            : isActive
-                              ? "bg-muted text-foreground w-[140px]"
-                              : isInSplitPair
-                                ? "hover:bg-muted/80 group-hover/split:bg-muted/60 w-[140px]"
-                                : "hover:bg-muted/80 w-[140px]",
+                          isActive
+                            ? "bg-muted text-foreground max-w-[180px]"
+                            : "hover:bg-muted/80 max-w-[150px]",
                         )}
                       >
                         {/* Icon: question icon (priority) OR loading spinner OR mode icon with badge (hide when editing) */}
@@ -824,9 +795,7 @@ export function SubChatSelector({
                               "absolute right-0 top-0 bottom-0 w-6 pointer-events-none z-[1] rounded-r-md opacity-100 group-hover:opacity-0 transition-opacity duration-200",
                               isActive
                                 ? "bg-gradient-to-l from-muted to-transparent"
-                                : isInSplitPair && isSplitVisible
-                                  ? "bg-gradient-to-l from-muted/60 to-transparent"
-                                  : "bg-gradient-to-l from-background to-transparent",
+                                : "bg-gradient-to-l from-background to-transparent",
                             )}
                             style={{ display: truncatedTabsRef.current.has(subChat.id) ? "block" : "none" }}
                           />
@@ -841,9 +810,7 @@ export function SubChatSelector({
                                   "absolute right-0 top-0 bottom-0 w-9 flex items-center justify-center rounded-r-md",
                                   isActive
                                     ? "bg-[linear-gradient(to_left,hsl(var(--muted))_0%,hsl(var(--muted))_60%,transparent_100%)]"
-                                    : isInSplitPair && isSplitVisible
-                                      ? "bg-[linear-gradient(to_left,hsl(var(--muted)/0.6)_0%,hsl(var(--muted)/0.6)_60%,transparent_100%)]"
-                                      : "bg-[linear-gradient(to_left,color-mix(in_srgb,hsl(var(--muted))_80%,hsl(var(--background)))_0%,color-mix(in_srgb,hsl(var(--muted))_80%,hsl(var(--background)))_60%,transparent_100%)]",
+                                    : "bg-[linear-gradient(to_left,color-mix(in_srgb,hsl(var(--muted))_80%,hsl(var(--background)))_0%,color-mix(in_srgb,hsl(var(--muted))_80%,hsl(var(--background)))_60%,transparent_100%)]",
                                 )}
                               />
                               <span
@@ -882,43 +849,10 @@ export function SubChatSelector({
                       hasTabsToRight={hasTabsToRight}
                       canCloseOtherTabs={openSubChats.length > 2}
                       chatId={parentChatId}
-                      onOpenInSplit={addToSplit}
-                      onCloseSplit={closeSplit}
-                      onRemoveFromSplit={removeFromSplit}
-                      splitPaneCount={splitPaneIds.length}
-                      splitPaneIds={splitPaneIds}
-                      isActiveTab={isActive}
-                      isSplitTab={isInSplitPair}
                     />
                   </ContextMenu>
-                ) }
-              })
-
-              // Post-process: wrap split group tabs in group container
-              if (!isSplitActive) return tabItems.map(t => t.element)
-
-              const result: React.ReactNode[] = []
-              let i = 0
-              while (i < tabItems.length) {
-                if (splitPaneIdSet.has(tabItems[i]!.id)) {
-                  // Collect consecutive split pane items
-                  const groupItems: typeof tabItems = []
-                  while (i < tabItems.length && splitPaneIdSet.has(tabItems[i]!.id)) {
-                    groupItems.push(tabItems[i]!)
-                    i++
-                  }
-                  result.push(
-                    <div key="split-group" className="group/split flex items-center gap-0.5 rounded-lg ring-1 ring-border flex-shrink-0 px-0.5 py-0.5">
-                      {groupItems.map(t => t.element)}
-                    </div>
-                  )
-                } else {
-                  result.push(tabItems[i]!.element)
-                  i++
-                }
-              }
-              return result
-            })()}
+                )
+              })}
         </div>
 
         {/* Plus button - absolute positioned on right with gradient cover */}
@@ -939,18 +873,8 @@ export function SubChatSelector({
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">
-                  <div className="flex flex-col gap-0.5">
-                    <div className="flex items-center gap-1">
-                      <span>New chat</span>
-                      {newAgentHotkey && <Kbd>{newAgentHotkey}</Kbd>}
-                    </div>
-                    {newAgentSplitHotkey && (
-                      <div className="flex items-center gap-1">
-                        <span>New in split</span>
-                        <Kbd>{newAgentSplitHotkey}</Kbd>
-                      </div>
-                    )}
-                  </div>
+                  New chat
+                  {newAgentHotkey && <Kbd>{newAgentHotkey}</Kbd>}
                 </TooltipContent>
               </Tooltip>
             </div>

@@ -85,7 +85,7 @@ const JETBRAINS_OPTIONS: AppOption[] = [
 
 const ALL_APP_OPTIONS = [...APP_OPTIONS, ...VSCODE_OPTIONS, ...JETBRAINS_OPTIONS];
 
-function getAppOption(id: ExternalApp): AppOption {
+export function getAppOption(id: ExternalApp): AppOption {
 	return ALL_APP_OPTIONS.find((app) => app.id === id) ?? APP_OPTIONS[1];
 }
 

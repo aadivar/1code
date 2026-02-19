@@ -56,7 +56,6 @@ import {
   useState
 } from "react"
 import { flushSync } from "react-dom"
-import type { VirtuosoHandle } from "react-virtuoso"
 import { toast } from "sonner"
 import { useShallow } from "zustand/react/shallow"
 import type { FileStatus } from "../../../../shared/changes-types"
@@ -69,6 +68,7 @@ import {
   defaultAgentModeAtom,
   isDesktopAtom, isFullscreenAtom,
   normalizeCustomClaudeConfig,
+  sessionInfoAtom,
   selectedOllamaModelAtom,
   soundNotificationsEnabledAtom
 } from "../../../lib/atoms"
@@ -96,6 +96,7 @@ import { FileViewerSidebar } from "../../file-viewer"
 import { FileSearchDialog } from "../../file-viewer/components/file-search-dialog"
 import { terminalBottomHeightAtom, terminalDisplayModeAtom, terminalSidebarOpenAtomFamily } from "../../terminal/atoms"
 import { TerminalBottomPanelContent, TerminalSidebar } from "../../terminal/terminal-sidebar"
+import { getTerminalScopeKey } from "../../terminal/utils"
 import {
   agentsChangesPanelCollapsedAtom,
   agentsChangesPanelWidthAtom,
@@ -127,12 +128,13 @@ import {
   pendingAuthRetryMessageAtom,
   pendingBuildPlanSubChatIdAtom,
   pendingConflictResolutionMessageAtom,
+  pendingChatHistoryAtom,
+  type PendingChatHistory,
   pendingMentionAtom,
   pendingPlanApprovalsAtom,
   pendingPrMessageAtom,
   pendingReviewMessageAtom,
   pendingUserQuestionsAtom,
-  planDisplayModeAtom,
   planEditRefetchTriggerAtomFamily,
   planSidebarOpenAtomFamily,
   QUESTIONS_SKIPPED_MESSAGE,
@@ -141,12 +143,12 @@ import {
   selectedDiffFilePathAtom,
   setLoading,
   subChatFilesAtom,
+  agentsSidebarOpenAtom,
   subChatModeAtomFamily,
   suppressInputFocusAtom,
   undoStackAtom,
   workspaceDiffCacheAtomFamily,
   type AgentMode,
-  type PlanDisplayMode,
   type SelectedCommit
 } from "../atoms"
 import { BUILTIN_SLASH_COMMANDS } from "../commands"
@@ -164,6 +166,8 @@ import { useHaptic } from "../hooks/use-haptic"
 import { usePastedTextFiles, type PastedTextFile } from "../hooks/use-pasted-text-files"
 import { useTextContextSelection } from "../hooks/use-text-context-selection"
 import { useToggleFocusOnCmdEsc } from "../hooks/use-toggle-focus-on-cmd-esc"
+import { ACPChatTransport } from "../lib/acp-chat-transport"
+import { formatHistoryForContext } from "../lib/export-chat"
 import {
   clearSubChatDraft,
   getSubChatDraftFull
@@ -171,11 +175,9 @@ import {
 import { IPCChatTransport } from "../lib/ipc-chat-transport"
 import {
   createQueueItem, createTextPreview, generateQueueId,
-  toQueuedDiffTextContext,
   toQueuedFile,
   toQueuedImage,
-  toQueuedPastedText,
-  toQueuedTextContext, type DiffTextContext, type SelectedTextContext
+  toQueuedTextContext, toQueuedDiffTextContext, toQueuedPastedText, type DiffTextContext, type SelectedTextContext
 } from "../lib/queue-utils"
 import { RemoteChatTransport } from "../lib/remote-chat-transport"
 import {
@@ -221,14 +223,12 @@ import { AgentsHeaderControls } from "../ui/agents-header-controls"
 import { ChatTitleEditor } from "../ui/chat-title-editor"
 import { MobileChatHeader } from "../ui/mobile-chat-header"
 import { QuickCommentInput } from "../ui/quick-comment-input"
-import { SplitViewContainer } from "../ui/split-view-container"
 import { SubChatSelector } from "../ui/sub-chat-selector"
 import { SubChatStatusCard } from "../ui/sub-chat-status-card"
 import { TextSelectionPopover } from "../ui/text-selection-popover"
 import { autoRenameAgentChat } from "../utils/auto-rename"
 import { generateCommitToPrMessage, generatePrMessage, generateReviewMessage } from "../utils/pr-message"
 import { ChatInputArea } from "./chat-input-area"
-import { USE_VIRTUOSO_CHAT, VIRTUOSO_FOLLOW_BOTTOM_THRESHOLD_PX } from "./chat-render-flags"
 import { IsolatedMessagesSection } from "./isolated-messages-section"
 const clearSubChatSelectionAtom = atom(null, () => {})
 const isSubChatMultiSelectModeAtom = atom(false)
@@ -238,19 +238,14 @@ const selectedTeamIdAtom = atom<string | null>(null)
 // import type { PlanType } from "@/lib/config/subscription-plans"
 type PlanType = string
 
-// UTF-8 safe base64 encoding (btoa doesn't support Unicode)
-function utf8ToBase64(str: string): string {
-  const bytes = new TextEncoder().encode(str)
-  const binString = Array.from(bytes, (byte) => String.fromCodePoint(byte)).join("")
-  return btoa(binString)
-}
+// Module-level scroll position cache (per subChatId, session-only)
+// Stores { scrollTop, scrollHeight, wasAtBottom } so we can restore position on tab switch
+const scrollPositionCache = new Map<
+  string,
+  { scrollTop: number; scrollHeight: number; wasAtBottom: boolean }
+>()
 
-// UTF-8 safe base64 decoding (atob doesn't support Unicode)
-function base64ToUtf8(base64: string): string {
-  const binString = atob(base64)
-  const bytes = Uint8Array.from(binString, (char) => char.codePointAt(0)!)
-  return new TextDecoder().decode(bytes)
-}
+import { utf8ToBase64, base64ToUtf8 } from "../utils/base64"
 
 /** Wait for streaming to finish by subscribing to the status store.
  *  Includes a 30s safety timeout — if the store never transitions to "ready",
@@ -365,7 +360,7 @@ const CodexIcon = (props: React.SVGProps<SVGSVGElement>) => (
 // Model options for Claude Code
 const claudeModels = [
   { id: "opus", name: "Opus 4.6" },
-  { id: "sonnet", name: "Sonnet 4.5" },
+  { id: "sonnet", name: "Sonnet 4.6" },
   { id: "haiku", name: "Haiku 4.5" },
 ]
 
@@ -775,28 +770,18 @@ const ScrollToBottomButton = memo(function ScrollToBottomButton({
   hasStackedCards = false,
   subChatId,
   isActive = true,
-  setVisibleRef,
 }: {
   containerRef: React.RefObject<HTMLElement | null>
   onScrollToBottom: () => void
   hasStackedCards?: boolean
   subChatId?: string
   isActive?: boolean
-  setVisibleRef?: React.MutableRefObject<((v: boolean) => void) | null>
 }) {
   const [isVisible, setIsVisible] = useState(false)
 
   // Keep isActive in ref for scroll event handler
   const isActiveRef = useRef(isActive)
   isActiveRef.current = isActive
-
-  // Expose setIsVisible to parent via ref (for Virtuoso atBottomStateChange)
-  useEffect(() => {
-    if (setVisibleRef) setVisibleRef.current = setIsVisible
-    return () => {
-      if (setVisibleRef) setVisibleRef.current = null
-    }
-  }, [setVisibleRef])
 
   useEffect(() => {
     // Skip scroll monitoring for inactive tabs (keep-alive)
@@ -928,15 +913,22 @@ function MessageGroup({ children, isLastGroup }: MessageGroupProps) {
     return () => observer.disconnect()
   }, [])
 
-  const lastGroupMinHeight = isLastGroup
-    ? { minHeight: "calc(var(--chat-container-height) - 48px)" }
-    : {}
-
   return (
     <div
       ref={groupRef}
       className="relative"
-      style={lastGroupMinHeight}
+      style={{
+        // content-visibility: auto - браузер пропускает layout/paint для элементов вне viewport
+        // Это ОГРОМНАЯ оптимизация для длинных чатов - рендерится только видимое
+        // НЕ применяем к последней группе: она всегда видна и активно стримится,
+        // content-visibility на ней мешает корректному scrollHeight во время стриминга
+        ...(!isLastGroup && {
+          contentVisibility: "auto",
+          containIntrinsicSize: "auto 200px",
+        }),
+        // Последняя группа имеет минимальную высоту контейнера чата (минус отступ)
+        ...(isLastGroup && { minHeight: "calc(var(--chat-container-height) - 32px)" }),
+      }}
       data-last-group={isLastGroup || undefined}
     >
       {children}
@@ -1907,9 +1899,11 @@ const ChatViewInner = memo(function ChatViewInner({
   chat,
   subChatId,
   parentChatId,
+  provider = "claude-code",
   isFirstSubChat,
   onAutoRename,
   onCreateNewSubChat,
+  onProviderChange,
   refreshDiff,
   teamId,
   repository,
@@ -1925,14 +1919,21 @@ const ChatViewInner = memo(function ChatViewInner({
   onRestoreWorkspace,
   existingPrUrl,
   isActive = true,
-  isSplitPane = false,
+  workspaceName,
+  workspaceBranch,
+  workspaceRepoName,
 }: {
   chat: Chat<any>
   subChatId: string
   parentChatId: string
+  provider?: "claude-code" | "codex"
   isFirstSubChat: boolean
   onAutoRename: (userMessage: string, subChatId: string) => void
   onCreateNewSubChat?: () => void
+  onProviderChange?: (
+    subChatId: string,
+    provider: "claude-code" | "codex",
+  ) => void
   refreshDiff?: () => void
   teamId?: string
   repository?: string
@@ -1948,12 +1949,12 @@ const ChatViewInner = memo(function ChatViewInner({
   onRestoreWorkspace?: () => void
   existingPrUrl?: string | null
   isActive?: boolean
-  isSplitPane?: boolean
+  workspaceName?: string | null
+  workspaceBranch?: string | null
+  workspaceRepoName?: string | null
 }) {
   const hasTriggeredRenameRef = useRef(false)
   const hasTriggeredAutoGenerateRef = useRef(false)
-
-  const useVirtuosoChat = USE_VIRTUOSO_CHAT
 
   // Keep isActive in ref for use in callbacks (avoid stale closures)
   const isActiveRef = useRef(isActive)
@@ -1966,19 +1967,6 @@ const ChatViewInner = memo(function ChatViewInner({
   const isInitializingScrollRef = useRef(false) // Flag to ignore scroll events during scroll initialization (content loading)
   const hasUnapprovedPlanRef = useRef(false) // Track unapproved plan state for scroll initialization
   const chatContainerRef = useRef<HTMLElement | null>(null)
-  const virtuosoRef = useRef<VirtuosoHandle | null>(null)
-  const messageIdToRowIndexRef = useRef<Map<string, number>>(new Map())
-  const scrollButtonSetVisibleRef = useRef<((v: boolean) => void) | null>(null)
-
-  const handleAtBottomChange = useCallback((atBottom: boolean) => {
-    shouldAutoScrollRef.current = atBottom
-    scrollButtonSetVisibleRef.current?.(!atBottom)
-  }, [])
-
-  const virtuosoFollowOutput = useCallback((isAtBottom: boolean) => {
-    if (!shouldAutoScrollRef.current) return false
-    return isAtBottom ? "auto" : false
-  }, [])
 
   // Cleanup isAutoScrollingRef on unmount to prevent stuck state
   useEffect(() => {
@@ -1987,8 +1975,44 @@ const ChatViewInner = memo(function ChatViewInner({
     }
   }, [])
 
+  // Save scroll position when tab becomes inactive or on unmount
+  useEffect(() => {
+    if (!isActive) {
+      // Tab just became inactive — save current scroll position
+      const container = chatContainerRef.current
+      if (container) {
+        const threshold = 50
+        const wasAtBottom =
+          container.scrollHeight - container.scrollTop - container.clientHeight <= threshold
+        scrollPositionCache.set(subChatId, {
+          scrollTop: container.scrollTop,
+          scrollHeight: container.scrollHeight,
+          wasAtBottom,
+        })
+      }
+    }
+    // On unmount, save scroll position for this sub-chat
+    return () => {
+      const container = chatContainerRef.current
+      if (container) {
+        const threshold = 50
+        const wasAtBottom =
+          container.scrollHeight - container.scrollTop - container.clientHeight <= threshold
+        scrollPositionCache.set(subChatId, {
+          scrollTop: container.scrollTop,
+          scrollHeight: container.scrollHeight,
+          wasAtBottom,
+        })
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isActive, subChatId])
+
   // Track chat container height via CSS custom property (no re-renders)
   const chatContainerObserverRef = useRef<ResizeObserver | null>(null)
+
+  // Ref for the inner content wrapper (for ResizeObserver-based scroll-to-bottom)
+  const contentWrapperRef = useRef<HTMLDivElement | null>(null)
 
   const editorRef = useRef<AgentsMentionsEditorHandle>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -2033,9 +2057,10 @@ const ChatViewInner = memo(function ChatViewInner({
   const isAtBottom = useCallback(() => {
     const container = chatContainerRef.current
     if (!container) return true
+    const threshold = 50 // pixels from bottom
     return (
       container.scrollHeight - container.scrollTop - container.clientHeight <=
-      VIRTUOSO_FOLLOW_BOTTOM_THRESHOLD_PX
+      threshold
     )
   }, [])
 
@@ -2076,16 +2101,6 @@ const ChatViewInner = memo(function ChatViewInner({
 
   // Scroll to bottom handler with ease-in-out animation
   const scrollToBottom = useCallback(() => {
-    if (useVirtuosoChat) {
-      shouldAutoScrollRef.current = true
-      virtuosoRef.current?.scrollToIndex({
-        index: "LAST",
-        align: "end",
-        behavior: "smooth",
-      })
-      return
-    }
-
     const container = chatContainerRef.current
     if (!container) return
 
@@ -2220,11 +2235,7 @@ const ChatViewInner = memo(function ChatViewInner({
       // If the component remounts with the same subChatId, the sync will repopulate the atoms
       // If it truly unmounts, the timeout will clear the caches
       const timeoutId = setTimeout(() => {
-        // Only clear when tab is no longer logically alive.
-        const { openSubChatIds } = useAgentSubChatStore.getState()
-        if (!openSubChatIds.includes(currentSubChatId)) {
-          clearSubChatCaches(currentSubChatId)
-        }
+        clearSubChatCaches(currentSubChatId)
       }, 100)
 
       // Store the timeout so it can be cancelled if the component remounts
@@ -2235,7 +2246,7 @@ const ChatViewInner = memo(function ChatViewInner({
   }, [subChatId])
 
   // Cancel pending cleanup if we remount with the same subChatId
-  useLayoutEffect(() => {
+  useEffect(() => {
     const pendingCleanups = (window as any).__pendingCacheCleanups as Map<string, number> | undefined
     if (pendingCleanups?.has(subChatId)) {
       clearTimeout(pendingCleanups.get(subChatId))
@@ -2291,11 +2302,21 @@ const ChatViewInner = memo(function ChatViewInner({
   const {
     pastedTexts,
     addPastedText,
+    addChatHistoryFile,
     removePastedText,
     clearPastedTexts,
     pastedTextsRef,
     setPastedTextsFromDraft,
   } = usePastedTextFiles(subChatId)
+
+  // Consume pending chat history file when this sub-chat is the target
+  useEffect(() => {
+    const pending = appStore.get(pendingChatHistoryAtom)
+    if (pending && pending.subChatId === subChatId) {
+      addChatHistoryFile(pending.file)
+      appStore.set(pendingChatHistoryAtom, null)
+    }
+  }, [subChatId, addChatHistoryFile])
 
   // File contents cache - stores content for file mentions (keyed by mentionId)
   // This content gets added to the prompt when sending, without showing a separate card
@@ -2413,26 +2434,6 @@ const ChatViewInner = memo(function ChatViewInner({
   const isStreamingRef = useRef(isStreaming)
   isStreamingRef.current = isStreaming
 
-  // Map messageId -> virtualized row index (based on user message groups)
-  useEffect(() => {
-    const map = new Map<string, number>()
-    let currentRowIndex = -1
-
-    for (const msg of messages) {
-      if (msg.role === "user") {
-        currentRowIndex += 1
-        map.set(msg.id, currentRowIndex)
-        continue
-      }
-
-      if (currentRowIndex >= 0) {
-        map.set(msg.id, currentRowIndex)
-      }
-    }
-
-    messageIdToRowIndexRef.current = map
-  }, [messages])
-
   // Track compacting status from SDK
   const compactingSubChats = useAtomValue(compactingSubChatsAtom)
   const isCompacting = compactingSubChats.has(subChatId)
@@ -2495,6 +2496,31 @@ const ChatViewInner = memo(function ChatViewInner({
     window.addEventListener("file-viewer-add-to-context", handler)
     return () => window.removeEventListener("file-viewer-add-to-context", handler)
   }, [addTextContext])
+
+  // Listen for file-tree "Add to Chat Context" — inserts file mention chip
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as {
+        id: string
+        label: string
+        path: string
+        repository: string
+        type: string
+      }
+      if (detail.id && detail.label) {
+        editorRef.current?.insertMention({
+          id: detail.id,
+          label: detail.label,
+          path: detail.path,
+          repository: detail.repository,
+          type: detail.type as "file" | "folder",
+        })
+        editorRef.current?.focus()
+      }
+    }
+    window.addEventListener("file-tree-mention", handler)
+    return () => window.removeEventListener("file-tree-mention", handler)
+  }, [])
 
   // Handler for quick comment trigger from popover
   const handleQuickComment = useCallback((text: string, source: TextSelectionSource, rect: DOMRect) => {
@@ -2566,7 +2592,7 @@ const ChatViewInner = memo(function ChatViewInner({
   const [pendingPrMessage, setPendingPrMessage] = useAtom(pendingPrMessageAtom)
 
   useEffect(() => {
-    if (pendingPrMessage?.subChatId === subChatId && !isStreaming && isActive && !isSplitPane) {
+    if (pendingPrMessage?.subChatId === subChatId && !isStreaming && isActive) {
       // Clear the pending message immediately to prevent double-sending
       setPendingPrMessage(null)
 
@@ -2584,7 +2610,7 @@ const ChatViewInner = memo(function ChatViewInner({
       store.addToOpenSubChats(subChatId)
       store.setActiveSubChat(subChatId)
     }
-  }, [pendingPrMessage, isStreaming, isActive, isSplitPane, sendMessage, setPendingPrMessage, setIsCreatingPr, subChatId])
+  }, [pendingPrMessage, isStreaming, isActive, sendMessage, setPendingPrMessage, setIsCreatingPr, subChatId])
 
   // Watch for pending Review message and send it
   const [pendingReviewMessage, setPendingReviewMessage] = useAtom(
@@ -2592,7 +2618,7 @@ const ChatViewInner = memo(function ChatViewInner({
   )
 
   useEffect(() => {
-    if (pendingReviewMessage && !isStreaming && isActive && !isSplitPane) {
+    if (pendingReviewMessage && !isStreaming && isActive) {
       // Clear the pending message immediately to prevent double-sending
       setPendingReviewMessage(null)
 
@@ -2602,7 +2628,7 @@ const ChatViewInner = memo(function ChatViewInner({
         parts: [{ type: "text", text: pendingReviewMessage }],
       })
     }
-  }, [pendingReviewMessage, isStreaming, isActive, isSplitPane, sendMessage, setPendingReviewMessage])
+  }, [pendingReviewMessage, isStreaming, isActive, sendMessage, setPendingReviewMessage])
 
   // Watch for pending conflict resolution message and send it
   const [pendingConflictMessage, setPendingConflictMessage] = useAtom(
@@ -2610,7 +2636,7 @@ const ChatViewInner = memo(function ChatViewInner({
   )
 
   useEffect(() => {
-    if (pendingConflictMessage && !isStreaming && isActive && !isSplitPane) {
+    if (pendingConflictMessage && !isStreaming && isActive) {
       // Clear the pending message immediately to prevent double-sending
       setPendingConflictMessage(null)
 
@@ -2620,7 +2646,7 @@ const ChatViewInner = memo(function ChatViewInner({
         parts: [{ type: "text", text: pendingConflictMessage }],
       })
     }
-  }, [pendingConflictMessage, isStreaming, isActive, isSplitPane, sendMessage, setPendingConflictMessage])
+  }, [pendingConflictMessage, isStreaming, isActive, sendMessage, setPendingConflictMessage])
 
   // Handle pending "Build plan" from sidebar (atom - effect is defined after handleApprovePlan)
   const [pendingBuildPlanSubChatId, setPendingBuildPlanSubChatId] = useAtom(
@@ -2989,6 +3015,7 @@ const ChatViewInner = memo(function ChatViewInner({
       pendingAuthRetry &&
       pendingAuthRetry.readyToRetry &&
       pendingAuthRetry.subChatId === subChatId &&
+      pendingAuthRetry.provider === provider &&
       !isStreaming
     ) {
       // Clear the pending message immediately to prevent double-sending
@@ -3021,6 +3048,7 @@ const ChatViewInner = memo(function ChatViewInner({
     }
   }, [
     pendingAuthRetry,
+    provider,
     isStreaming,
     sendMessage,
     setPendingAuthRetry,
@@ -3369,6 +3397,51 @@ const ChatViewInner = memo(function ChatViewInner({
     ],
   )
 
+  // Fork handler - creates a new sub-chat with messages up to this point
+  // Preserves SDK session context by copying .jsonl session files
+  const isForkingRef = useRef(false)
+  const handleForkFromMessage = useCallback(
+    async (messageId: string) => {
+      if (isStreaming || isForkingRef.current) return
+      isForkingRef.current = true
+
+      try {
+        const result = await trpcClient.chats.forkSubChat.mutate({
+          subChatId,
+          messageId,
+        })
+
+        const newSubChat = result.subChat
+        const newMode = (newSubChat.mode as "plan" | "agent") || "agent"
+
+        // Invalidate + await ensures agentSubChats has the fork before we switch tabs
+        await utils.agents.getAgentChat.invalidate({ chatId: parentChatId })
+
+        // Update Zustand sub-chat store
+        const store = useAgentSubChatStore.getState()
+        store.addToAllSubChats({
+          id: newSubChat.id,
+          name: newSubChat.name || "Fork",
+          created_at: newSubChat.created_at || new Date().toISOString(),
+          mode: newMode,
+        })
+
+        // Set mode atom for the new sub-chat
+        appStore.set(subChatModeAtomFamily(newSubChat.id), newMode)
+
+        // Open the forked sub-chat tab and switch to it
+        store.addToOpenSubChats(newSubChat.id)
+        store.setActiveSubChat(newSubChat.id)
+      } catch (error) {
+        console.error("[handleForkFromMessage] Error:", error)
+        toast.error("Failed to fork conversation")
+      } finally {
+        isForkingRef.current = false
+      }
+    },
+    [isStreaming, subChatId, parentChatId, utils],
+  )
+
   // Sync local isRollingBack state to global atom (prevents multiple rollbacks across chats)
   const setIsRollingBackAtom = useSetAtom(isRollingBackAtom)
   useEffect(() => {
@@ -3498,12 +3571,10 @@ const ChatViewInner = memo(function ChatViewInner({
   // Ref to track if initial scroll has been set for this sub-chat
   const scrollInitializedRef = useRef(false)
 
-  // Track if this tab has been initialized (for keep-alive)
-  const hasInitializedRef = useRef(false)
-
-  // Initialize scroll position on mount (only once per tab with keep-alive)
-  // Strategy: wait for content to stabilize, then scroll to bottom ONCE
-  // No jumping around - just wait and scroll when ready
+  // Initialize scroll position on mount or tab re-activation.
+  // Strategy: restore saved position if user was scrolled up, otherwise scroll to bottom.
+  // Uses ResizeObserver on content wrapper to catch ALL height changes (markdown rendering,
+  // syntax highlighting, image loading, content-visibility reflows) — not just childList mutations.
   useLayoutEffect(() => {
     // Skip if not active (keep-alive: hidden tabs don't need scroll init)
     if (!isActive) return
@@ -3511,41 +3582,46 @@ const ChatViewInner = memo(function ChatViewInner({
     const container = chatContainerRef.current
     if (!container) return
 
-    // With keep-alive, only initialize once per tab mount
-    if (hasInitializedRef.current) return
-    hasInitializedRef.current = true
-
-    // Reset on sub-chat change
     scrollInitializedRef.current = false
     isInitializingScrollRef.current = true
 
-    if (useVirtuosoChat) {
-      // Virtuoso owns scrolling; just mark as initialized
-      scrollInitializedRef.current = true
-      isInitializingScrollRef.current = false
-      return
-    }
+    // Check for saved scroll position from tab switch
+    const savedPosition = scrollPositionCache.get(subChatId)
 
-    // IMMEDIATE scroll to bottom - no waiting
-    container.scrollTop = container.scrollHeight
-    shouldAutoScrollRef.current = true
+    if (savedPosition && !savedPosition.wasAtBottom) {
+      // User was scrolled up — restore their position relative to content bottom.
+      // Content may have changed height since we saved, so we offset from the bottom:
+      const savedOffset = savedPosition.scrollHeight - savedPosition.scrollTop
+      container.scrollTop = Math.max(0, container.scrollHeight - savedOffset)
+      shouldAutoScrollRef.current = false
+    } else {
+      // No saved position or user was at bottom — scroll to bottom
+      container.scrollTop = container.scrollHeight
+      shouldAutoScrollRef.current = true
+    }
 
     // Mark as initialized IMMEDIATELY
     scrollInitializedRef.current = true
     isInitializingScrollRef.current = false
 
-    // MutationObserver for async content (images, code blocks loading after initial render)
-    const observer = new MutationObserver((mutations) => {
+    // ResizeObserver on content wrapper to detect any height change
+    // (markdown rendering, syntax highlighting, image loads, content-visibility reflows, etc.)
+    // This is more reliable than MutationObserver which only catches childList changes.
+    const contentWrapper = contentWrapperRef.current
+    let lastContentHeight = contentWrapper?.getBoundingClientRect().height ?? 0
+    // Track the previous scrollHeight so we can adjust restored positions proportionally
+    let prevScrollHeight = container.scrollHeight
+
+    const resizeObserver = new ResizeObserver(() => {
       // Skip if not active (keep-alive: don't scroll hidden tabs)
-      if (!isActive) return
-      if (!shouldAutoScrollRef.current) return
+      if (!isActiveRef.current) return
 
-      // Check if content was added
-      const hasAddedContent = mutations.some(
-        (m) => m.type === "childList" && m.addedNodes.length > 0
-      )
+      const newContentHeight = contentWrapper?.getBoundingClientRect().height ?? 0
+      if (newContentHeight === lastContentHeight) return
+      lastContentHeight = newContentHeight
 
-      if (hasAddedContent) {
+      if (shouldAutoScrollRef.current) {
+        // Auto-scroll to bottom as content grows
         requestAnimationFrame(() => {
           isAutoScrollingRef.current = true
           container.scrollTop = container.scrollHeight
@@ -3553,13 +3629,24 @@ const ChatViewInner = memo(function ChatViewInner({
             isAutoScrollingRef.current = false
           })
         })
+      } else {
+        // User is scrolled up — maintain their relative position as content height changes
+        // (e.g., syntax highlighting expanding code blocks above the viewport)
+        const newScrollHeight = container.scrollHeight
+        if (newScrollHeight !== prevScrollHeight && prevScrollHeight > 0) {
+          const delta = newScrollHeight - prevScrollHeight
+          container.scrollTop = container.scrollTop + delta
+        }
       }
+      prevScrollHeight = container.scrollHeight
     })
 
-    observer.observe(container, { childList: true, subtree: true })
+    if (contentWrapper) {
+      resizeObserver.observe(contentWrapper)
+    }
 
     return () => {
-      observer.disconnect()
+      resizeObserver.disconnect()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subChatId, isActive])
@@ -3569,18 +3656,9 @@ const ChatViewInner = memo(function ChatViewInner({
     const container = chatContainerRef.current
     if (!container) return
 
-    const handleWheel = (event: WheelEvent) => {
-      if (!isActiveRef.current) return
-      if (event.deltaY < 0) {
-        shouldAutoScrollRef.current = false
-      }
-    }
-
     container.addEventListener("scroll", handleScroll, { passive: true })
-    container.addEventListener("wheel", handleWheel, { passive: true })
     return () => {
       container.removeEventListener("scroll", handleScroll)
-      container.removeEventListener("wheel", handleWheel)
     }
   }, [handleScroll])
 
@@ -3594,17 +3672,6 @@ const ChatViewInner = memo(function ChatViewInner({
 
     // Auto-scroll during streaming if user hasn't scrolled up
     if (shouldAutoScrollRef.current && status === "streaming") {
-      if (useVirtuosoChat) {
-        requestAnimationFrame(() => {
-          virtuosoRef.current?.scrollToIndex({
-            index: "LAST",
-            align: "end",
-            behavior: "auto",
-          })
-        })
-        return
-      }
-
       const container = chatContainerRef.current
       if (container) {
         // Always scroll during streaming if auto-scroll is enabled
@@ -3686,13 +3753,15 @@ const ChatViewInner = memo(function ChatViewInner({
     const currentImages = imagesRef.current
     const currentFiles = filesRef.current
     const currentTextContexts = textContextsRef.current
+    const currentDiffTextContexts = diffTextContextsRef.current
     const currentPastedTexts = pastedTextsRef.current
     const hasImages =
       currentImages.filter((img) => !img.isLoading && img.url).length > 0
     const hasTextContexts = currentTextContexts.length > 0
+    const hasDiffTextContexts = currentDiffTextContexts.length > 0
     const hasPastedTexts = currentPastedTexts.length > 0
 
-    if (!hasText && !hasImages && !hasTextContexts && !hasPastedTexts) return
+    if (!hasText && !hasImages && !hasTextContexts && !hasDiffTextContexts && !hasPastedTexts) return
 
     // If streaming, add to queue instead of sending directly
     if (isStreamingRef.current) {
@@ -3703,7 +3772,7 @@ const ChatViewInner = memo(function ChatViewInner({
         .filter((f) => !f.isLoading && f.url)
         .map(toQueuedFile)
       const queuedTextContexts = currentTextContexts.map(toQueuedTextContext)
-      const queuedDiffTextContexts = diffTextContextsRef.current.map(toQueuedDiffTextContext)
+      const queuedDiffTextContexts = currentDiffTextContexts.map(toQueuedDiffTextContext)
       const queuedPastedTexts = currentPastedTexts.map(toQueuedPastedText)
 
       const item = createQueueItem(
@@ -3713,7 +3782,7 @@ const ChatViewInner = memo(function ChatViewInner({
         queuedFiles.length > 0 ? queuedFiles : undefined,
         queuedTextContexts.length > 0 ? queuedTextContexts : undefined,
         queuedDiffTextContexts.length > 0 ? queuedDiffTextContexts : undefined,
-        queuedPastedTexts.length > 0 ? queuedPastedTexts : undefined
+        queuedPastedTexts.length > 0 ? queuedPastedTexts : undefined,
       )
       addToQueue(subChatId, item)
 
@@ -3812,7 +3881,6 @@ const ChatViewInner = memo(function ChatViewInner({
     ]
 
     // Add text contexts as mention tokens
-    const currentDiffTextContexts = diffTextContextsRef.current
     let mentionPrefix = ""
 
     if (currentTextContexts.length > 0 || currentDiffTextContexts.length > 0 || currentPastedTexts.length > 0) {
@@ -3829,12 +3897,12 @@ const ChatViewInner = memo(function ChatViewInner({
         return `@[${MENTION_PREFIXES.DIFF}${dtc.filePath}:${lineNum}:${preview}:${encodedText}]`
       })
 
-      // Add pasted text as pasted mentions (format: pasted:size:preview|filepath)
+      // Add pasted text / chat history as mentions (format: prefix:size:preview|filepath)
       // Using | as separator since filepath can contain colons
       const pastedTextMentions = currentPastedTexts.map((pt) => {
-        // Sanitize preview to remove special characters that break mention parsing
         const sanitizedPreview = pt.preview.replace(/[:\[\]|]/g, "")
-        return `@[${MENTION_PREFIXES.PASTED}${pt.size}:${sanitizedPreview}|${pt.filePath}]`
+        const prefix = pt.kind === "chatHistory" ? MENTION_PREFIXES.CHAT_HISTORY : MENTION_PREFIXES.PASTED
+        return `@[${prefix}${pt.size}:${sanitizedPreview}|${pt.filePath}]`
       })
 
       mentionPrefix = [...quoteMentions, ...diffMentions, ...pastedTextMentions].join(" ") + " "
@@ -3987,13 +4055,14 @@ const ChatViewInner = memo(function ChatViewInner({
         mentionPrefix += diffMentions.join(" ") + " "
       }
 
-      // Add pasted text contexts as mention tokens
+      // Add pasted text / chat history as mentions
       if (item.pastedTexts && item.pastedTexts.length > 0) {
-        const pastedTextMentions = item.pastedTexts.map((pt) => {
+        const pastedMentions = item.pastedTexts.map((pt) => {
           const sanitizedPreview = pt.preview.replace(/[:\[\]|]/g, "")
-          return `@[${MENTION_PREFIXES.PASTED}${pt.size}:${sanitizedPreview}|${pt.filePath}]`
+          const prefix = pt.kind === "chatHistory" ? MENTION_PREFIXES.CHAT_HISTORY : MENTION_PREFIXES.PASTED
+          return `@[${prefix}${pt.size}:${sanitizedPreview}|${pt.filePath}]`
         })
-        mentionPrefix += pastedTextMentions.join(" ") + " "
+        mentionPrefix += pastedMentions.join(" ") + " "
       }
 
       if (item.message || mentionPrefix) {
@@ -4342,40 +4411,6 @@ const ChatViewInner = memo(function ChatViewInner({
     // Increment lock to cancel any pending scroll operations
     const currentLock = ++searchScrollLockRef.current
 
-    const tryScrollToMatchInDom = () => {
-      // First try to find the highlight mark
-      let targetElement: Element | null = container.querySelector(".search-highlight-current")
-
-      // If no highlight mark, find the message element with matching data attributes
-      if (!targetElement) {
-        const selector = `[data-message-id="${currentSearchMatch.messageId}"][data-part-index="${currentSearchMatch.partIndex}"]`
-        targetElement = container.querySelector(selector)
-      }
-
-      if (targetElement) {
-        // Check if this is inside a sticky user message container
-        const stickyParent = targetElement.closest("[data-user-message-id]")
-        if (stickyParent) {
-          const messageGroupWrapper = stickyParent.parentElement
-          if (messageGroupWrapper) {
-            messageGroupWrapper.scrollIntoView({
-              behavior: "smooth",
-              block: "start",
-            })
-            return true
-          }
-        }
-
-        targetElement.scrollIntoView({
-          behavior: "smooth",
-          block: "center",
-        })
-        return true
-      }
-
-      return false
-    }
-
     // Use double requestAnimationFrame + small delay to ensure DOM has updated with new highlights
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
@@ -4383,26 +4418,33 @@ const ChatViewInner = memo(function ChatViewInner({
           // Check if this scroll operation is still valid (not superseded by newer one)
           if (searchScrollLockRef.current !== currentLock) return
 
-          if (tryScrollToMatchInDom()) return
+          // First try to find the highlight mark
+          let targetElement: Element | null = container.querySelector(".search-highlight-current")
 
-          if (useVirtuosoChat) {
-            const rowIndex = messageIdToRowIndexRef.current.get(currentSearchMatch.messageId)
-            if (rowIndex !== undefined) {
-              virtuosoRef.current?.scrollToIndex({
-                index: rowIndex,
-                align: "center",
-                behavior: "smooth",
-              })
+          // If no highlight mark, find the message element with matching data attributes
+          if (!targetElement) {
+            const selector = `[data-message-id="${currentSearchMatch.messageId}"][data-part-index="${currentSearchMatch.partIndex}"]`
+            targetElement = container.querySelector(selector)
+          }
 
-              requestAnimationFrame(() => {
-                requestAnimationFrame(() => {
-                  setTimeout(() => {
-                    if (searchScrollLockRef.current !== currentLock) return
-                    tryScrollToMatchInDom()
-                  }, 50)
+          if (targetElement) {
+            // Check if this is inside a sticky user message container
+            const stickyParent = targetElement.closest("[data-user-message-id]")
+            if (stickyParent) {
+              const messageGroupWrapper = stickyParent.parentElement
+              if (messageGroupWrapper) {
+                messageGroupWrapper.scrollIntoView({
+                  behavior: "smooth",
+                  block: "start",
                 })
-              })
+                return
+              }
             }
+
+            targetElement.scrollIntoView({
+              behavior: "smooth",
+              block: "center",
+            })
           }
         }, 50)
       })
@@ -4415,14 +4457,76 @@ const ChatViewInner = memo(function ChatViewInner({
     isStreaming || isCompacting || changedFilesForSubChat.length > 0
   const shouldShowStackedCards =
     !displayQuestions && (queue.length > 0 || shouldShowStatusCard)
+  const handleInputProviderChange = useCallback(
+    (nextProvider: "claude-code" | "codex") => {
+      onProviderChange?.(subChatId, nextProvider)
+    },
+    [onProviderChange, subChatId],
+  )
 
-  const MessageGroupWrapper = useCallback(
-    ({ children, isLastGroup }: { children: React.ReactNode; isLastGroup?: boolean }) => (
-      <MessageGroup isLastGroup={isLastGroup}>
-        {children}
-      </MessageGroup>
-    ),
-    []
+  // Continue conversation with a different provider - creates new sub-chat with history attachment
+  const isContinuingRef = useRef(false)
+  const handleContinueWithProvider = useCallback(
+    async (targetProvider: "claude-code" | "codex") => {
+      if (isStreaming || isContinuingRef.current) return
+      if (!messages || messages.length === 0) return
+      isContinuingRef.current = true
+
+      try {
+        // 1. Format current messages as markdown
+        const historyMarkdown = formatHistoryForContext(messages as any)
+
+        // 2. Save to disk via writePastedText endpoint
+        const result = await trpcClient.files.writePastedText.mutate({
+          subChatId,
+          text: historyMarkdown,
+        })
+
+        // 3. Create new sub-chat
+        const newSubChat = await trpcClient.chats.createSubChat.mutate({
+          chatId: parentChatId,
+          name: "New Chat",
+          mode: subChatMode,
+        })
+
+        const newId = newSubChat.id
+
+        // 4. Store pending chat history for the new sub-chat to consume on mount
+        const historyFile: PendingChatHistory["file"] = {
+          id: `chatHistory_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+          filePath: result.filePath,
+          filename: result.filename,
+          size: result.size,
+          preview: subChatNameRef.current?.trim() || "Previous Chat",
+          createdAt: new Date(),
+          kind: "chatHistory",
+        }
+        appStore.set(pendingChatHistoryAtom, { subChatId: newId, file: historyFile })
+
+        // 5. Update Zustand store and switch to new tab
+        const store = useAgentSubChatStore.getState()
+        store.addToAllSubChats({
+          id: newId,
+          name: "New Chat",
+          created_at: new Date().toISOString(),
+          mode: subChatMode,
+        })
+        appStore.set(subChatModeAtomFamily(newId), subChatMode)
+        store.addToOpenSubChats(newId)
+        store.setActiveSubChat(newId)
+
+        // 6. Set provider override AFTER tab switch so the outer component picks it up
+        // We call onProviderChange which sets subChatProviderOverrides in the outer scope
+        // The new sub-chat has 0 messages so the guard in handleProviderChange will pass
+        onProviderChange?.(newId, targetProvider)
+      } catch (error) {
+        console.error("[handleContinueWithProvider] Error:", error)
+        toast.error("Failed to continue with provider")
+      } finally {
+        isContinuingRef.current = false
+      }
+    },
+    [isStreaming, messages, subChatId, parentChatId, subChatMode, onProviderChange],
   )
 
   return (
@@ -4465,8 +4569,16 @@ const ChatViewInner = memo(function ChatViewInner({
             onSave={handleRenameSubChat}
             isMobile={false}
             chatId={subChatId}
-            hasMessages={messages.length > 0}
+            hasMessages={true} /* Always show "New Chat" placeholder when name is empty */
           />
+          {/* Workspace subtitle: repo • branch */}
+          {(workspaceRepoName || workspaceBranch) && (
+            <div className="max-w-2xl mx-auto px-4">
+              <span className="text-xs text-muted-foreground/50 truncate block">
+                {[workspaceRepoName, workspaceBranch].filter(Boolean).join(" • ")}
+              </span>
+            </div>
+          )}
         </div>
       )}
 
@@ -4504,29 +4616,35 @@ const ChatViewInner = memo(function ChatViewInner({
         tabIndex={-1}
         data-chat-container
       >
-        {/* ISOLATED: Messages rendered via Jotai atom subscription
-            Each component subscribes to specific atoms and only re-renders when those change
-            KEY: Force remount on subChatId change to ensure fresh atom reads after syncMessages */}
-        <IsolatedMessagesSection
-          key={subChatId}
-          subChatId={subChatId}
-          chatId={parentChatId}
-          isMobile={isMobile}
-          isSplitPane={isSplitPane}
-          sandboxSetupStatus={sandboxSetupStatus}
-          stickyTopClass={stickyTopClass}
-          sandboxSetupError={sandboxSetupError}
-          onRetrySetup={onRetrySetup}
-          UserBubbleComponent={AgentUserMessageBubble}
-          ToolCallComponent={AgentToolCall}
-          MessageGroupWrapper={MessageGroupWrapper}
-          toolRegistry={AgentToolRegistry}
-          onRollback={handleRollback}
-          scrollParentRef={chatContainerRef}
-          virtuosoRef={virtuosoRef}
-          followOutput={useVirtuosoChat ? virtuosoFollowOutput : false}
-          onAtBottomStateChange={handleAtBottomChange}
-        />
+        <div
+          ref={contentWrapperRef}
+          className="px-2 max-w-2xl mx-auto -mb-4 space-y-4"
+          style={{
+            paddingBottom: "32px",
+          }}
+        >
+          <div>
+            {/* ISOLATED: Messages rendered via Jotai atom subscription
+                Each component subscribes to specific atoms and only re-renders when those change
+                KEY: Force remount on subChatId change to ensure fresh atom reads after syncMessages */}
+            <IsolatedMessagesSection
+              key={subChatId}
+              subChatId={subChatId}
+              chatId={parentChatId}
+              isMobile={isMobile}
+              sandboxSetupStatus={sandboxSetupStatus}
+              stickyTopClass={stickyTopClass}
+              sandboxSetupError={sandboxSetupError}
+              onRetrySetup={onRetrySetup}
+              UserBubbleComponent={AgentUserMessageBubble}
+              ToolCallComponent={AgentToolCall}
+              MessageGroupWrapper={MessageGroup}
+              toolRegistry={AgentToolRegistry}
+              onRollback={handleRollback}
+              onFork={handleForkFromMessage}
+            />
+          </div>
+        </div>
       </div>
 
       {/* User questions panel - shows for both live (pending) and expired (timed out) questions */}
@@ -4604,6 +4722,7 @@ const ChatViewInner = memo(function ChatViewInner({
         messageTokenData={messageTokenData}
         subChatId={subChatId}
         parentChatId={parentChatId}
+        provider={provider}
         teamId={teamId}
         repository={repository}
         sandboxId={sandboxId}
@@ -4615,6 +4734,9 @@ const ChatViewInner = memo(function ChatViewInner({
         firstQueueItemId={queue[0]?.id}
         onInputContentChange={setInputHasContent}
         onSubmitWithQuestionAnswer={submitWithQuestionAnswerCallback}
+        onProviderChange={handleInputProviderChange}
+        onContinueWithProvider={handleContinueWithProvider}
+        isActive={isActive}
       />
 
         {/* Scroll to bottom button - isolated component to avoid re-renders during streaming */}
@@ -4624,7 +4746,6 @@ const ChatViewInner = memo(function ChatViewInner({
           hasStackedCards={shouldShowStackedCards}
           subChatId={subChatId}
           isActive={isActive}
-          setVisibleRef={scrollButtonSetVisibleRef}
         />
       </div>
     </SearchHighlightProvider>
@@ -4675,6 +4796,7 @@ export function ChatView({
 
   const isDesktop = useAtomValue(isDesktopAtom)
   const isFullscreen = useAtomValue(isFullscreenAtom)
+  const sidebarOpen = useAtomValue(agentsSidebarOpenAtom)
   const customClaudeConfig = useAtomValue(customClaudeConfigAtom)
   const selectedOllamaModel = useAtomValue(selectedOllamaModelAtom)
   const normalizedCustomClaudeConfig =
@@ -4712,19 +4834,11 @@ export function ChatView({
     [activeSubChatIdForPlan],
   )
   const [isPlanSidebarOpen, setIsPlanSidebarOpen] = useAtom(planSidebarAtom)
-  const [planDisplayMode, setPlanDisplayMode] = useAtom(planDisplayModeAtom)
   const currentPlanPathAtom = useMemo(
     () => currentPlanPathAtomFamily(activeSubChatIdForPlan || ""),
     [activeSubChatIdForPlan],
   )
   const [currentPlanPath, setCurrentPlanPath] = useAtom(currentPlanPathAtom)
-
-  // Effective plan display mode: force center-peek in split view, otherwise use user preference
-  // Computed early because mutual exclusion logic needs it
-  const isSplitViewForPlan = useAgentSubChatStore(
-    useShallow((state) => state.splitPaneIds.length >= 2 && state.splitPaneIds.includes(state.activeSubChatId))
-  )
-  const effectivePlanDisplayMode: PlanDisplayMode = isSplitViewForPlan ? "center-peek" : planDisplayMode
 
   // File viewer sidebar state - per-chat open file path
   const fileViewerAtom = useMemo(
@@ -4746,16 +4860,16 @@ export function ChatView({
   const toggleTerminalHotkey = useResolvedHotkeyDisplay("toggle-terminal")
 
   // Close plan sidebar when switching to a sub-chat that has no plan
-  // Skip in split view — clicking between panes shouldn't close the plan dialog
   const prevSubChatIdRef = useRef(activeSubChatIdForPlan)
   useEffect(() => {
     if (prevSubChatIdRef.current !== activeSubChatIdForPlan) {
-      if (!currentPlanPath && !isSplitViewForPlan) {
+      // Sub-chat changed - if new one has no plan path, close sidebar
+      if (!currentPlanPath) {
         setIsPlanSidebarOpen(false)
       }
       prevSubChatIdRef.current = activeSubChatIdForPlan
     }
-  }, [activeSubChatIdForPlan, currentPlanPath, isSplitViewForPlan, setIsPlanSidebarOpen])
+  }, [activeSubChatIdForPlan, currentPlanPath, setIsPlanSidebarOpen])
   const setPendingBuildPlanSubChatId = useSetAtom(pendingBuildPlanSubChatIdAtom)
 
   // Read plan edit refetch trigger from atom (set by ChatViewInner when Edit completes)
@@ -4823,16 +4937,14 @@ export function ChatView({
   // Track previous states to detect opens/closes
   const prevSidebarStatesRef = useRef({
     details: isDetailsSidebarOpen,
-    plan: isPlanSidebarOpen && !!currentPlanPath && effectivePlanDisplayMode === "side-peek",
+    plan: isPlanSidebarOpen && !!currentPlanPath,
     terminal: isTerminalSidebarOpen,
   })
 
   useEffect(() => {
     const prev = prevSidebarStatesRef.current
     const auto = autoClosedStateRef.current
-    // Only treat plan as a physical sidebar conflict when in side-peek mode
-    // In center-peek (dialog) mode, plan floats above everything — no conflict
-    const isPlanOpen = isPlanSidebarOpen && !!currentPlanPath && effectivePlanDisplayMode === "side-peek"
+    const isPlanOpen = isPlanSidebarOpen && !!currentPlanPath
 
     // Detect state changes
     const detailsJustOpened = isDetailsSidebarOpen && !prev.details
@@ -4897,7 +5009,6 @@ export function ChatView({
     isDetailsSidebarOpen,
     isPlanSidebarOpen,
     currentPlanPath,
-    effectivePlanDisplayMode,
     isTerminalSidebarOpen,
     terminalDisplayMode,
     setIsDetailsSidebarOpen,
@@ -5018,14 +5129,16 @@ export function ChatView({
   }, [isDiffSidebarOpen, diffDisplayMode, isDetailsSidebarOpen, setDiffDisplayMode, setIsDetailsSidebarOpen, setIsDiffSidebarOpen])
 
   // Hide/show traffic lights based on full-page diff or full-page file viewer
+  // When exiting full-page mode, restore based on sidebar state (not unconditionally true)
   useEffect(() => {
     if (!isDesktop || isFullscreen) return
     if (typeof window === "undefined" || !window.desktopApi?.setTrafficLightVisibility) return
 
     const isFullPageDiff = isDiffSidebarOpen && diffDisplayMode === "full-page"
     const isFullPageFileViewer = !!fileViewerPath && fileViewerDisplayMode === "full-page"
-    window.desktopApi.setTrafficLightVisibility(!isFullPageDiff && !isFullPageFileViewer)
-  }, [isDiffSidebarOpen, diffDisplayMode, fileViewerPath, fileViewerDisplayMode, isDesktop, isFullscreen])
+    const shouldHide = isFullPageDiff || isFullPageFileViewer
+    window.desktopApi.setTrafficLightVisibility(shouldHide ? false : sidebarOpen)
+  }, [isDiffSidebarOpen, diffDisplayMode, fileViewerPath, fileViewerDisplayMode, isDesktop, isFullscreen, sidebarOpen])
 
   // Track diff sidebar width for responsive header
   const storedDiffSidebarWidth = useAtomValue(agentsDiffSidebarWidthAtom)
@@ -5104,22 +5217,22 @@ export function ChatView({
     openSubChatIds,
     pinnedSubChatIds,
     allSubChats,
-    splitPaneIds,
   } = useAgentSubChatStore(
     useShallow((state) => ({
       activeSubChatId: state.activeSubChatId,
       openSubChatIds: state.openSubChatIds,
       pinnedSubChatIds: state.pinnedSubChatIds,
       allSubChats: state.allSubChats,
-      splitPaneIds: state.splitPaneIds,
     }))
   )
+  const [
+    subChatProviderOverrides,
+    setSubChatProviderOverrides,
+  ] = useState<Record<string, "claude-code" | "codex">>({})
 
-  // isSplitView alias using local splitPaneIds (for JSX rendering)
-  const isSplitView = splitPaneIds.length >= 2 && splitPaneIds.includes(activeSubChatId)
-  const handlePlanDisplayModeChange = useCallback((mode: PlanDisplayMode) => {
-    setPlanDisplayMode(mode)
-  }, [setPlanDisplayMode])
+  useEffect(() => {
+    setSubChatProviderOverrides({})
+  }, [chatId])
 
   // Clear sub-chat "unseen changes" indicator when sub-chat becomes active
   useEffect(() => {
@@ -5149,6 +5262,7 @@ export function ChatView({
   const [isReviewing, setIsReviewing] = useState(false)
   // Subchat filter setter - used by handleReview to filter by active subchat
   const setFilteredSubChatId = useSetAtom(filteredSubChatIdAtom)
+  const setSessionInfo = useSetAtom(sessionInfoAtom)
 
   // Determine if we're in sandbox mode
   const chatSourceMode = useAtomValue(chatSourceModeAtom)
@@ -5248,7 +5362,7 @@ export function ChatView({
   // Workspace isolation: limit mounted tabs to prevent memory growth
   // CRITICAL: Filter by workspace to prevent rendering sub-chats from other workspaces
   // Always render: active + pinned, then fill with recent up to limit
-  const MAX_MOUNTED_TABS = Math.max(5, splitPaneIds.length + 2)
+  const MAX_MOUNTED_TABS = 5
   const tabsToRender = useMemo(() => {
     if (!activeSubChatId) return []
 
@@ -5276,13 +5390,6 @@ export function ChatView({
     // Start with active (must always be mounted)
     const mustRender = new Set([activeSubChatId])
 
-    // Ensure all split panes are always mounted
-    for (const paneId of splitPaneIds) {
-      if (validSubChatIds.has(paneId)) {
-        mustRender.add(paneId)
-      }
-    }
-
     // Add pinned tabs (only valid ones)
     for (const id of validPinnedIds) {
       mustRender.add(id)
@@ -5307,14 +5414,8 @@ export function ChatView({
     if (!result.includes(activeSubChatId)) {
       result.unshift(activeSubChatId)
     }
-    // Also ensure split pane tabs are in the result
-    for (const paneId of splitPaneIds) {
-      if (validSubChatIds.has(paneId) && !result.includes(paneId)) {
-        result.push(paneId)
-      }
-    }
     return result
-  }, [activeSubChatId, splitPaneIds, pinnedSubChatIds, openSubChatIds, allSubChats, agentSubChats])
+  }, [activeSubChatId, pinnedSubChatIds, openSubChatIds, allSubChats, agentSubChats])
 
   // Get PR status when PR exists (for checking if it's open/merged/closed)
   const hasPrNumber = !!agentChat?.prNumber
@@ -5425,6 +5526,15 @@ export function ChatView({
   const worktreePath = agentChat?.worktreePath as string | null
   // Desktop: original project path for MCP config lookup
   const originalProjectPath = (agentChat as any)?.project?.path as string | undefined
+
+  // Terminal scope key: shared by project path (local mode) or isolated per workspace (worktree)
+  const terminalScopeKey = useMemo(() => {
+    return getTerminalScopeKey({
+      branch: (agentChat as any)?.branch ?? null,
+      worktreePath: worktreePath,
+      id: chatId,
+    })
+  }, [(agentChat as any)?.branch, worktreePath, chatId])
   // Fallback for web: use sandbox_id
   const sandboxId = agentChat?.sandbox_id
   const sandboxUrl = sandboxId ? `https://3003-${sandboxId}.e2b.app` : null
@@ -6136,6 +6246,146 @@ Make sure to preserve all functionality from both branches when resolving confli
     setCurrentPlanPath(lastPlanPath)
   }, [agentSubChats, activeSubChatIdForPlan, setCurrentPlanPath])
 
+  const inferProviderFromMessages = useCallback(
+    (subChatId?: string): "claude-code" | "codex" => {
+      if (!subChatId) return "claude-code"
+
+      const override = subChatProviderOverrides[subChatId]
+      if (override) return override
+
+      const subChat = ((agentChat as any)?.subChats || []).find(
+        (sc: any) => sc?.id === subChatId,
+      ) as { messages?: any } | undefined
+      const rawMessages = subChat?.messages
+
+      let messages: any[] = []
+      if (Array.isArray(rawMessages)) {
+        messages = rawMessages
+      } else if (typeof rawMessages === "string") {
+        try {
+          const parsed = JSON.parse(rawMessages)
+          messages = Array.isArray(parsed) ? parsed : []
+        } catch {
+          messages = []
+        }
+      }
+
+      for (const message of messages) {
+        const model = (message as any)?.metadata?.model
+        if (typeof model !== "string") continue
+        const normalizedModel = model.toLowerCase()
+        if (
+          normalizedModel.includes("codex") ||
+          normalizedModel.startsWith("gpt-")
+        ) {
+          return "codex"
+        }
+      }
+
+      return "claude-code"
+    },
+    [agentChat, subChatProviderOverrides],
+  )
+
+  const activeSubChatProvider = useMemo(
+    () => inferProviderFromMessages(activeSubChatId || undefined),
+    [activeSubChatId, inferProviderFromMessages],
+  )
+
+  const { data: codexMcpConfig } = trpc.codex.getAllMcpConfig.useQuery(undefined, {
+    enabled: activeSubChatProvider === "codex",
+    staleTime: 5 * 60 * 1000,
+  })
+
+  const codexMcpSessionData = useMemo(() => {
+    if (activeSubChatProvider !== "codex") return null
+    if (!codexMcpConfig) return null
+
+    const groups = codexMcpConfig?.groups || []
+    if (groups.length === 0) {
+      return {
+        mcpServers: [],
+        mcpTools: [],
+      }
+    }
+
+    const orderedGroups = [
+      ...groups.filter((group) => group.projectPath === null),
+      ...groups.filter(
+        (group) =>
+          group.projectPath !== null &&
+          !!originalProjectPath &&
+          group.projectPath === originalProjectPath,
+      ),
+    ]
+
+    const effectiveServers = new Map<string, (typeof groups)[number]["mcpServers"][number]>()
+    for (const group of orderedGroups) {
+      for (const server of group.mcpServers || []) {
+        if (typeof server?.name !== "string" || server.name.length === 0) continue
+        effectiveServers.set(server.name, server)
+      }
+    }
+
+    const mcpServers: Array<{
+      name: string
+      status: "connected" | "failed" | "pending" | "needs-auth"
+      serverInfo?: { name: string; version: string; icons?: Array<{ src: string }> }
+      error?: string
+    }> = []
+    const mcpToolIds = new Set<string>()
+
+    for (const server of effectiveServers.values()) {
+      const status =
+        server.status === "connected" ||
+        server.status === "failed" ||
+        server.status === "pending" ||
+        server.status === "needs-auth"
+          ? server.status
+          : "failed"
+
+      mcpServers.push({
+        name: server.name,
+        status,
+        ...(server.serverInfo ? { serverInfo: server.serverInfo } : {}),
+        ...(server.error ? { error: server.error } : {}),
+      })
+
+      for (const tool of Array.isArray(server.tools) ? server.tools : []) {
+        const toolName =
+          typeof tool === "string"
+            ? tool
+            : typeof tool?.name === "string"
+              ? tool.name
+              : null
+        if (!toolName) continue
+        mcpToolIds.add(`mcp__${server.name}__${toolName}`)
+      }
+    }
+
+    return {
+      mcpServers,
+      mcpTools: [...mcpToolIds].sort((a, b) => a.localeCompare(b)),
+    }
+  }, [activeSubChatProvider, codexMcpConfig?.groups, originalProjectPath])
+
+  useEffect(() => {
+    if (activeSubChatProvider !== "codex" || !codexMcpSessionData) return
+
+    setSessionInfo((prev) => {
+      const nonMcpTools = (prev?.tools || []).filter(
+        (tool) => !tool.startsWith("mcp__"),
+      )
+
+      return {
+        tools: [...nonMcpTools, ...codexMcpSessionData.mcpTools],
+        mcpServers: codexMcpSessionData.mcpServers,
+        plugins: prev?.plugins || [],
+        skills: prev?.skills || [],
+      }
+    })
+  }, [activeSubChatProvider, codexMcpSessionData, setSessionInfo])
+
   // Create or get Chat instance for a sub-chat
   const getOrCreateChat = useCallback(
     (subChatId: string): Chat<any> | null => {
@@ -6143,22 +6393,6 @@ Make sure to preserve all functionality from both branches when resolving confli
       if (!chatWorkingDir || !agentChat) {
         return null
       }
-
-      // Return existing chat if we have it
-      const existing = agentChatStore.get(subChatId)
-      if (existing) {
-        return existing
-      }
-
-      // Find sub-chat data
-      const subChat = agentSubChats.find((sc) => sc.id === subChatId)
-      const messages = (subChat?.messages as any[]) || []
-
-      // Get mode from store metadata (falls back to currentMode)
-      const subChatMeta = useAgentSubChatStore
-        .getState()
-        .allSubChats.find((sc) => sc.id === subChatId)
-      const subChatMode = subChatMeta?.mode || currentMode
 
       // Create transport based on chat type (local worktree vs remote sandbox)
       // Note: Extended thinking setting is read dynamically inside the transport
@@ -6168,6 +6402,64 @@ Make sure to preserve all functionality from both branches when resolving confli
       const chatSandboxUrl = chatSandboxId ? `https://3003-${chatSandboxId}.e2b.app` : null
       const isRemoteChat = !!(agentChat as any)?.isRemote || !!chatSandboxId
 
+      // Fast path for existing chats. Only inspect messages when a local empty-chat provider override
+      // might require transport recreation.
+      const existing = agentChatStore.get(subChatId)
+      if (existing) {
+        if (isRemoteChat) return existing
+
+        const overrideProvider = subChatProviderOverrides[subChatId]
+        if (!overrideProvider) return existing
+
+        const existingProvider: "claude-code" | "codex" =
+          (existing as any)?.transport instanceof ACPChatTransport
+            ? "codex"
+            : "claude-code"
+        if (existingProvider === overrideProvider) return existing
+
+        const subChatForOverride = agentSubChats.find((sc) => sc.id === subChatId)
+        const rawExistingMessages = subChatForOverride?.messages
+        const existingMessageCount = Array.isArray(rawExistingMessages)
+          ? rawExistingMessages.length
+          : typeof rawExistingMessages === "string"
+            ? (() => {
+                try {
+                  const parsed = JSON.parse(rawExistingMessages)
+                  return Array.isArray(parsed) ? parsed.length : 0
+                } catch {
+                  return 0
+                }
+              })()
+            : 0
+
+        if (existingMessageCount > 0) return existing
+        agentChatStore.delete(subChatId)
+      }
+
+      // Find sub-chat data
+      const subChat = agentSubChats.find((sc) => sc.id === subChatId)
+      const rawMessages = subChat?.messages
+      const messages = Array.isArray(rawMessages)
+        ? rawMessages
+        : typeof rawMessages === "string"
+          ? (() => {
+              try {
+                const parsed = JSON.parse(rawMessages)
+                return Array.isArray(parsed) ? parsed : []
+              } catch {
+                return []
+              }
+            })()
+          : []
+
+      // Get mode from store metadata (falls back to currentMode)
+      const subChatMeta = useAgentSubChatStore
+        .getState()
+        .allSubChats.find((sc) => sc.id === subChatId)
+      const subChatMode = subChatMeta?.mode || currentMode
+
+      const chatProvider = inferProviderFromMessages(subChatId)
+
       console.log("[getOrCreateChat] Transport selection", {
         subChatId: subChatId.slice(-8),
         isRemoteChat,
@@ -6176,7 +6468,7 @@ Make sure to preserve all functionality from both branches when resolving confli
         worktreePath: worktreePath ? "exists" : "none",
       })
 
-      let transport: IPCChatTransport | RemoteChatTransport | null = null
+      let transport: IPCChatTransport | RemoteChatTransport | ACPChatTransport | null = null
 
       if (isRemoteChat && chatSandboxUrl) {
         // Remote sandbox chat: use HTTP SSE transport
@@ -6192,14 +6484,26 @@ Make sure to preserve all functionality from both branches when resolving confli
           model: modelString,
         })
       } else if (worktreePath) {
-        // Local worktree chat: use IPC transport
-        transport = new IPCChatTransport({
-          chatId,
-          subChatId,
-          cwd: worktreePath,
-          projectPath,
-          mode: subChatMode,
-        })
+        if (chatProvider === "codex") {
+          console.log("[getOrCreateChat] Using ACPChatTransport", { provider: chatProvider })
+          transport = new ACPChatTransport({
+            chatId,
+            subChatId,
+            cwd: worktreePath,
+            projectPath,
+            mode: subChatMode,
+            provider: "codex",
+          })
+        } else {
+          // Local worktree chat: use IPC transport
+          transport = new IPCChatTransport({
+            chatId,
+            subChatId,
+            cwd: worktreePath,
+            projectPath,
+            mode: subChatMode,
+          })
+        }
       }
 
       if (!transport) {
@@ -6293,6 +6597,8 @@ Make sure to preserve all functionality from both branches when resolving confli
       worktreePath,
       chatId,
       currentMode,
+      inferProviderFromMessages,
+      subChatProviderOverrides,
       setSubChatUnseenChanges,
       selectedChatId,
       setUnseenChanges,
@@ -6300,11 +6606,49 @@ Make sure to preserve all functionality from both branches when resolving confli
     ],
   )
 
+  const handleProviderChange = useCallback(
+    (subChatId: string, nextProvider: "claude-code" | "codex") => {
+      // Provider switch is only allowed for brand new sub-chats.
+      const activeChat = agentChatStore.get(subChatId) as any
+      let messageCount = Array.isArray(activeChat?.messages)
+        ? activeChat.messages.length
+        : 0
+
+      if (messageCount === 0) {
+        const subChat = agentSubChats.find((sc) => sc.id === subChatId)
+        const rawMessages = subChat?.messages
+        if (Array.isArray(rawMessages)) {
+          messageCount = rawMessages.length
+        } else if (typeof rawMessages === "string") {
+          try {
+            const parsed = JSON.parse(rawMessages)
+            messageCount = Array.isArray(parsed) ? parsed.length : 0
+          } catch {
+            messageCount = 0
+          }
+        }
+      }
+
+      if (messageCount > 0) return
+
+      setSubChatProviderOverrides((prev) => ({
+        ...prev,
+        [subChatId]: nextProvider,
+      }))
+
+      // Force transport recreation with the newly selected provider.
+      agentChatStore.delete(subChatId)
+      forceUpdate({})
+    },
+    [agentSubChats],
+  )
+
   // Handle creating a new sub-chat
   const handleCreateNewSubChat = useCallback(async () => {
     const store = useAgentSubChatStore.getState()
     // New sub-chats use the user's default mode preference
     const newSubChatMode = defaultAgentMode
+    const newSubChatProvider = inferProviderFromMessages(activeSubChatId || undefined)
 
     // Check if this is a remote sandbox chat
     const isRemoteChat = !!(agentChat as any)?.isRemote
@@ -6350,6 +6694,10 @@ Make sure to preserve all functionality from both branches when resolving confli
 
     // Track this subchat as just created for typewriter effect
     setJustCreatedIds((prev) => new Set([...prev, newId]))
+    setSubChatProviderOverrides((prev) => ({
+      ...prev,
+      [newId]: newSubChatProvider,
+    }))
 
     // Add to allSubChats with placeholder name
     store.addToAllSubChats({
@@ -6379,7 +6727,8 @@ Make sure to preserve all functionality from both branches when resolving confli
       newSubChatSandboxUrl,
     })
 
-    let newSubChatTransport: IPCChatTransport | RemoteChatTransport | null = null
+    const chatProvider = newSubChatProvider
+    let newSubChatTransport: IPCChatTransport | RemoteChatTransport | ACPChatTransport | null = null
 
     if (isNewSubChatRemote && newSubChatSandboxUrl) {
       // Remote sandbox chat: use HTTP SSE transport
@@ -6394,14 +6743,26 @@ Make sure to preserve all functionality from both branches when resolving confli
         model: modelString,
       })
     } else if (worktreePath) {
-      // Local worktree chat: use IPC transport
-      newSubChatTransport = new IPCChatTransport({
-        chatId,
-        subChatId: newId,
-        cwd: worktreePath,
-        projectPath,
-        mode: newSubChatMode,
-      })
+      if (chatProvider === "codex") {
+        console.log("[createNewSubChat] Using ACPChatTransport", { provider: chatProvider })
+        newSubChatTransport = new ACPChatTransport({
+          chatId,
+          subChatId: newId,
+          cwd: worktreePath,
+          projectPath,
+          mode: newSubChatMode,
+          provider: "codex",
+        })
+      } else {
+        // Local worktree chat: use IPC transport
+        newSubChatTransport = new IPCChatTransport({
+          chatId,
+          subChatId: newId,
+          cwd: worktreePath,
+          projectPath,
+          mode: newSubChatMode,
+        })
+      }
     }
 
     if (newSubChatTransport) {
@@ -6486,6 +6847,8 @@ Make sure to preserve all functionality from both branches when resolving confli
     worktreePath,
     chatId,
     defaultAgentMode,
+    activeSubChatId,
+    inferProviderFromMessages,
     utils,
     setSubChatUnseenChanges,
     selectedChatId,
@@ -6495,44 +6858,15 @@ Make sure to preserve all functionality from both branches when resolving confli
     agentChat?.name,
   ])
 
-  // Handle creating a new sub-chat in split view
-  const handleCreateNewSubChatInSplit = useCallback(async () => {
-    const store = useAgentSubChatStore.getState()
-    const currentActive = store.activeSubChatId
-
-    // Create the new sub-chat first (reuses existing logic)
-    await handleCreateNewSubChat()
-
-    // After creation, the new sub-chat is now the active one
-    const newActive = useAgentSubChatStore.getState().activeSubChatId
-    if (newActive && currentActive && newActive !== currentActive) {
-      // If there's no existing split, addToSplit will create one with [currentActive, newActive]
-      // If there's an existing split, it will add newActive to it
-      // We need to set the active back to the original so addToSplit pairs correctly
-      store.setActiveSubChat(currentActive)
-      store.addToSplit(newActive)
-      // Set active to the new sub-chat
-      store.setActiveSubChat(newActive)
-    }
-  }, [handleCreateNewSubChat])
-
   // Keyboard shortcut: New sub-chat
   // Web: Opt+Cmd+T (browser uses Cmd+T for new tab)
   // Desktop: Cmd+T
-  // Desktop: Cmd+Shift+T → new sub-chat in split view
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const isDesktop = isDesktopApp()
 
-      // Desktop: Cmd+Shift+T → new sub-chat in split view
-      if (isDesktop && e.metaKey && e.shiftKey && e.code === "KeyT" && !e.altKey) {
-        e.preventDefault()
-        handleCreateNewSubChatInSplit()
-        return
-      }
-
-      // Desktop: Cmd+T (without Alt, without Shift)
-      if (isDesktop && e.metaKey && e.code === "KeyT" && !e.altKey && !e.shiftKey) {
+      // Desktop: Cmd+T (without Alt)
+      if (isDesktop && e.metaKey && e.code === "KeyT" && !e.altKey) {
         e.preventDefault()
         handleCreateNewSubChat()
         return
@@ -6547,7 +6881,7 @@ Make sure to preserve all functionality from both branches when resolving confli
 
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [handleCreateNewSubChat, handleCreateNewSubChatInSplit])
+  }, [handleCreateNewSubChat])
 
   // NOTE: Desktop notifications for pending questions are now triggered directly
   // in ipc-chat-transport.ts when the ask-user-question chunk arrives.
@@ -7116,7 +7450,7 @@ Make sure to preserve all functionality from both branches when resolving confli
             </div>
           )}
 
-          {/* Chat Content - render active tab explicitly (no hidden keep-alive tabs) */}
+          {/* Chat Content - Keep-alive: render all open tabs, hide inactive with CSS */}
           {tabsToRender.length > 0 && agentChat ? (
             <div className="relative flex-1 min-h-0">
               {/* Loading gate: prevent getOrCreateChat() from caching empty messages before data is ready */}
@@ -7124,81 +7458,65 @@ Make sure to preserve all functionality from both branches when resolving confli
                 <div className="flex items-center justify-center h-full">
                   <IconSpinner className="h-6 w-6 animate-spin" />
                 </div>
-              ) : splitPaneIds.length >= 2 && splitPaneIds.includes(activeSubChatId) ? (
-                // SPLIT VIEW: active tab is part of the split group — show N panes
-                <SplitViewContainer
-                  panes={splitPaneIds.map(paneId => {
-                    const chat = getOrCreateChat(paneId)
-                    const isFirstSubChat = getFirstSubChatId(agentSubChats) === paneId
-                    return {
-                      id: paneId,
-                      content: chat ? (
-                        <ChatViewInner
-                          chat={chat}
-                          subChatId={paneId}
-                          parentChatId={chatId}
-                          isFirstSubChat={isFirstSubChat}
-                          onAutoRename={handleAutoRename}
-                          onCreateNewSubChat={handleCreateNewSubChat}
-                          teamId={selectedTeamId || undefined}
-                          repository={repository}
-                          streamId={agentChatStore.getStreamId(paneId)}
-                          isMobile={isMobileFullscreen}
-                          isSubChatsSidebarOpen={subChatsSidebarMode === "sidebar"}
-                          sandboxId={sandboxId || undefined}
-                          projectPath={worktreePath || undefined}
-                          isArchived={isArchived}
-                          onRestoreWorkspace={handleRestoreWorkspace}
-                          existingPrUrl={agentChat?.prUrl}
-                          isActive={true}
-                          isSplitPane={true}
-                        />
-                      ) : null,
-                    }
-                  })}
-                  onCloseSplit={() => useAgentSubChatStore.getState().closeSplit()}
-                />
               ) : (
-                // NORMAL VIEW: mount only the active sub-chat
-                (() => {
-                  const subChatId = activeSubChatId
-                  if (!subChatId) return null
+                tabsToRender.map(subChatId => {
+                const chat = getOrCreateChat(subChatId)
+                const isActive = subChatId === activeSubChatId
+                const isFirstSubChat = getFirstSubChatId(agentSubChats) === subChatId
 
-                  const chat = getOrCreateChat(subChatId)
-                  const isFirstSubChat = getFirstSubChatId(agentSubChats) === subChatId
+                // Defense in depth: double-check workspace ownership
+                // Use agentSubChats (server data) as primary source, fall back to allSubChats for optimistic updates
+                // This fixes the race condition where allSubChats is empty after setChatId but before setAllSubChats
+                const belongsToWorkspace = agentSubChats.some(sc => sc.id === subChatId) ||
+                                          allSubChats.some(sc => sc.id === subChatId)
 
-                  // Defense in depth: ensure active sub-chat belongs to current workspace
-                  const belongsToWorkspace =
-                    agentSubChats.some((sc) => sc.id === subChatId) ||
-                    allSubChats.some((sc) => sc.id === subChatId)
+                if (!chat || !belongsToWorkspace) return null
 
-                  if (!chat || !belongsToWorkspace) return null
-
-                  return (
-                    <div key={subChatId} className="absolute inset-0 flex flex-col">
-                      <ChatViewInner
-                        key={subChatId}
-                        chat={chat}
-                        subChatId={subChatId}
-                        parentChatId={chatId}
-                        isFirstSubChat={isFirstSubChat}
-                        onAutoRename={handleAutoRename}
-                        onCreateNewSubChat={handleCreateNewSubChat}
-                        teamId={selectedTeamId || undefined}
-                        repository={repository}
-                        streamId={agentChatStore.getStreamId(subChatId)}
-                        isMobile={isMobileFullscreen}
-                        isSubChatsSidebarOpen={subChatsSidebarMode === "sidebar"}
-                        sandboxId={sandboxId || undefined}
-                        projectPath={worktreePath || undefined}
-                        isArchived={isArchived}
-                        onRestoreWorkspace={handleRestoreWorkspace}
-                        existingPrUrl={agentChat?.prUrl}
-                        isActive={true}
-                      />
-                    </div>
-                  )
-                })()
+                return (
+                  <div
+                    key={subChatId}
+                    className="absolute inset-0 flex flex-col"
+                    style={{
+                      // GPU-accelerated visibility switching (нативное ощущение)
+                      // transform + opacity быстрее чем visibility для GPU
+                      transform: isActive ? "translateZ(0)" : "translateZ(0) scale(0.98)",
+                      opacity: isActive ? 1 : 0,
+                      // Prevent pointer events on hidden tabs
+                      pointerEvents: isActive ? "auto" : "none",
+                      // GPU layer hints
+                      willChange: "transform, opacity",
+                      // Изолируем layout - изменения внутри не влияют на другие табы
+                      contain: "layout style paint",
+                    }}
+                    aria-hidden={!isActive}
+                  >
+                    <ChatViewInner
+                      chat={chat}
+                      subChatId={subChatId}
+                      parentChatId={chatId}
+                      provider={inferProviderFromMessages(subChatId)}
+                      isFirstSubChat={isFirstSubChat}
+                      onAutoRename={handleAutoRename}
+                      onCreateNewSubChat={handleCreateNewSubChat}
+                      onProviderChange={handleProviderChange}
+                      teamId={selectedTeamId || undefined}
+                      repository={repository}
+                      streamId={agentChatStore.getStreamId(subChatId)}
+                      isMobile={isMobileFullscreen}
+                      isSubChatsSidebarOpen={subChatsSidebarMode === "sidebar"}
+                      sandboxId={sandboxId || undefined}
+                      projectPath={worktreePath || undefined}
+                      isArchived={isArchived}
+                      onRestoreWorkspace={handleRestoreWorkspace}
+                      existingPrUrl={agentChat?.prUrl}
+                      isActive={isActive}
+                      workspaceName={agentChat?.name ?? null}
+                      workspaceBranch={agentChat?.branch ?? null}
+                      workspaceRepoName={(agentChat as any)?.project?.gitRepo || (agentChat as any)?.project?.name || null}
+                    />
+                  </div>
+                )
+              })
               )}
             </div>
           ) : (
@@ -7278,8 +7596,9 @@ Make sure to preserve all functionality from both branches when resolving confli
           )}
         </div>
 
-        {/* Plan Sidebar - side-peek mode (ResizableSidebar) */}
-        {!isMobileFullscreen && activeSubChatIdForPlan && effectivePlanDisplayMode === "side-peek" && (
+        {/* Plan Sidebar - shows plan files on the right (leftmost right sidebar) */}
+        {/* Only show when we have an active sub-chat with a plan */}
+        {!isMobileFullscreen && activeSubChatIdForPlan && (
           <ResizableSidebar
             isOpen={isPlanSidebarOpen && !!currentPlanPath}
             onClose={() => setIsPlanSidebarOpen(false)}
@@ -7301,29 +7620,8 @@ Make sure to preserve all functionality from both branches when resolving confli
               onBuildPlan={handleApprovePlanFromSidebar}
               refetchTrigger={planEditRefetchTrigger}
               mode={currentMode}
-              displayMode="side-peek"
-              onDisplayModeChange={handlePlanDisplayModeChange}
             />
           </ResizableSidebar>
-        )}
-        {/* Plan Sidebar - center-peek mode (Dialog overlay) */}
-        {activeSubChatIdForPlan && effectivePlanDisplayMode === "center-peek" && isPlanSidebarOpen && !!currentPlanPath && (
-          <DiffCenterPeekDialog
-            isOpen={true}
-            onClose={() => setIsPlanSidebarOpen(false)}
-          >
-            <AgentPlanSidebar
-              chatId={activeSubChatIdForPlan}
-              planPath={currentPlanPath}
-              onClose={() => setIsPlanSidebarOpen(false)}
-              onBuildPlan={handleApprovePlanFromSidebar}
-              refetchTrigger={planEditRefetchTrigger}
-              mode={currentMode}
-              displayMode="center-peek"
-              onDisplayModeChange={handlePlanDisplayModeChange}
-              isSplitView={isSplitView}
-            />
-          </DiffCenterPeekDialog>
         )}
 
         {/* Diff View - hidden on mobile fullscreen and when diff is not available */}
@@ -7510,6 +7808,7 @@ Make sure to preserve all functionality from both branches when resolving confli
         {worktreePath && (
           <TerminalSidebar
             chatId={chatId}
+            scopeKey={terminalScopeKey}
             cwd={worktreePath}
             workspaceId={chatId}
           />
@@ -7536,7 +7835,7 @@ Make sure to preserve all functionality from both branches when resolving confli
             onBuildPlan={handleApprovePlanFromSidebar}
             planRefetchTrigger={planEditRefetchTrigger}
             activeSubChatId={activeSubChatIdForPlan}
-            isPlanSidebarOpen={isPlanSidebarOpen && !!currentPlanPath && effectivePlanDisplayMode === "side-peek"}
+            isPlanSidebarOpen={isPlanSidebarOpen && !!currentPlanPath}
             isTerminalSidebarOpen={isTerminalSidebarOpen}
             isDiffSidebarOpen={isDiffSidebarOpen}
             diffDisplayMode={diffDisplayMode}
@@ -7561,6 +7860,7 @@ Make sure to preserve all functionality from both branches when resolving confli
               // Open the diff sidebar
               setIsDiffSidebarOpen(true)
             }}
+            onOpenFile={setFileViewerPath}
             remoteInfo={remoteInfo}
             isRemoteChat={!!remoteInfo}
           />
@@ -7582,6 +7882,7 @@ Make sure to preserve all functionality from both branches when resolving confli
         >
           <TerminalBottomPanelContent
             chatId={chatId}
+            scopeKey={terminalScopeKey}
             cwd={worktreePath}
             workspaceId={chatId}
             onClose={() => setIsTerminalSidebarOpen(false)}

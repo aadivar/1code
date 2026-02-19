@@ -4,6 +4,7 @@ import { memo, useState, useMemo } from "react"
 import { ChevronRight } from "lucide-react"
 
 import { areToolPropsEqual } from "./agent-tool-utils"
+import { TextShimmer } from "../../../components/ui/text-shimmer"
 import { cn } from "../../../lib/utils"
 
 interface SearchResult {
@@ -69,7 +70,17 @@ export const AgentWebSearchCollapsible = memo(
           <div className="flex-1 min-w-0 flex items-center gap-1">
             <div className="text-xs flex items-center gap-1.5 min-w-0">
               <span className="font-medium whitespace-nowrap flex-shrink-0 text-muted-foreground">
-                {isStreaming ? "Searching web" : "Searched web"}
+                {isStreaming ? (
+                  <TextShimmer
+                    as="span"
+                    duration={1.2}
+                    className="inline-flex items-center text-xs leading-none"
+                  >
+                    Searching web
+                  </TextShimmer>
+                ) : (
+                  "Searched web"
+                )}
               </span>
               {/* Query preview when collapsed */}
               <span className="text-muted-foreground/60 truncate">

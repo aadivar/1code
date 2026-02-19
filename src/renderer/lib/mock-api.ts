@@ -59,6 +59,47 @@ export const api = {
                           input: part.input || part.args,
                         }
                       }
+                      // Normalize ACP/codex tool types (e.g. "tool-Read README.md" → "tool-Read")
+                      // Detects ACP parts by: title-based type with space, or proxy tool name, or input.toolName present
+                      if (part.type?.startsWith("tool-") && (part.input?.toolName || part.type.includes(" ") || part.type === "tool-acp.acp_provider_agent_dynamic_tool")) {
+                        const acpVerbMap: AnyObj = {
+                          Read: "Read", Run: "Bash", List: "Glob", Search: "Grep",
+                          Grep: "Grep", Glob: "Glob", Edit: "Edit", Write: "Write",
+                          Thought: "Thinking", Fetch: "WebFetch",
+                        }
+                        const title: string = part.input?.toolName || part.type.slice(5)
+                        const args: AnyObj = part.input?.args ?? {}
+                        const spaceIdx = title.indexOf(" ")
+                        const verb = spaceIdx === -1 ? title : title.slice(0, spaceIdx)
+                        const detail = spaceIdx === -1 ? "" : title.slice(spaceIdx + 1)
+                        const toolType = acpVerbMap[verb]
+                        if (toolType) {
+                          const unwrapped: AnyObj = {
+                            ...part,
+                            type: `tool-${toolType}`,
+                            input: { ...args, _acpTitle: title, _acpDetail: detail },
+                          }
+                          if (toolType === "Read" && !unwrapped.input.file_path && detail) unwrapped.input.file_path = detail
+                          if (toolType === "Bash") {
+                            if (Array.isArray(unwrapped.input.command)) {
+                              unwrapped.input.command = unwrapped.input.command[unwrapped.input.command.length - 1] || detail
+                            } else if (!unwrapped.input.command && detail) {
+                              unwrapped.input.command = detail
+                            }
+                          }
+                          if (toolType === "Grep" && !unwrapped.input.pattern && detail) unwrapped.input.pattern = detail
+                          if (toolType === "Glob" && !unwrapped.input.pattern && detail) unwrapped.input.pattern = detail
+                          // State normalization
+                          if (unwrapped.state) {
+                            let normalizedState = unwrapped.state
+                            if (unwrapped.state === "result") {
+                              normalizedState = unwrapped.result?.success === false ? "output-error" : "output-available"
+                            }
+                            return { ...unwrapped, state: normalizedState, output: unwrapped.output || unwrapped.result }
+                          }
+                          return unwrapped
+                        }
+                      }
                       // Normalize state field from DB format to AI SDK format
                       // DB stores: "result", "call" -> AI SDK expects: "output-available", "call"
                       if (part.type?.startsWith("tool-") && part.state) {

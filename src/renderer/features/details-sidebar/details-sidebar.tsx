@@ -1,8 +1,8 @@
 "use client"
 
-import { useCallback, useEffect, useMemo } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useAtom, useAtomValue, useSetAtom } from "jotai"
-import { ArrowUpRight, TerminalSquare, Box, ListTodo, Gauge } from "lucide-react"
+import { ArrowUpRight, TerminalSquare, Box, ListTodo } from "lucide-react"
 import { ResizableSidebar } from "@/components/ui/resizable-sidebar"
 import { Button } from "@/components/ui/button"
 import {
@@ -15,6 +15,9 @@ import {
   PlanIcon,
   DiffIcon,
   OriginalMCPIcon,
+  SearchIcon,
+  ExpandIcon,
+  CollapseIcon,
 } from "@/components/ui/icons"
 import { Kbd } from "@/components/ui/kbd"
 import { cn } from "@/lib/utils"
@@ -22,10 +25,12 @@ import { useResolvedHotkeyDisplay } from "@/lib/hotkeys"
 import {
   detailsSidebarOpenAtom,
   detailsSidebarWidthAtom,
+  detailsSidebarTabAtom,
   widgetVisibilityAtomFamily,
   widgetOrderAtomFamily,
   WIDGET_REGISTRY,
   type WidgetId,
+  type DetailsSidebarTab,
 } from "./atoms"
 import { WidgetSettingsPopup } from "./widget-settings-popup"
 import { InfoSection } from "./sections/info-section"
@@ -33,14 +38,110 @@ import { TodoWidget } from "./sections/todo-widget"
 import { PlanWidget } from "./sections/plan-widget"
 import { TerminalWidget } from "./sections/terminal-widget"
 import { ChangesWidget } from "./sections/changes-widget"
-import { UsageWidget } from "./sections/usage-widget"
 import { McpWidget } from "./sections/mcp-widget"
+import { FilesTab, type FilesTabHandle } from "./sections/files-tab"
 import type { ParsedDiffFile } from "./types"
-import type { AgentMode } from "../agents/atoms"
+import { fileViewerOpenAtomFamily, type AgentMode } from "../agents/atoms"
 import {
   agentsSettingsDialogOpenAtom,
   agentsSettingsDialogActiveTabAtom,
 } from "@/lib/atoms"
+
+// ============================================================================
+// WidgetCard — extracted as a real component to avoid remounts
+// ============================================================================
+
+function getWidgetIcon(widgetId: WidgetId) {
+  switch (widgetId) {
+    case "info":
+      return Box
+    case "todo":
+      return ListTodo
+    case "plan":
+      return PlanIcon
+    case "terminal":
+      return TerminalSquare
+    case "diff":
+      return DiffIcon
+    case "mcp":
+      return OriginalMCPIcon
+    default:
+      return Box
+  }
+}
+
+function WidgetCard({
+  widgetId,
+  title,
+  badge,
+  children,
+  customHeader,
+  headerBg,
+  hideExpand,
+  onExpand,
+}: {
+  widgetId: WidgetId
+  title: string
+  badge?: React.ReactNode
+  children: React.ReactNode
+  customHeader?: React.ReactNode
+  headerBg?: string
+  hideExpand?: boolean
+  onExpand?: () => void
+}) {
+  const Icon = getWidgetIcon(widgetId)
+  const config = WIDGET_REGISTRY.find((w) => w.id === widgetId)
+  const canExpand = (config?.canExpand ?? false) && !hideExpand && !!onExpand
+
+  return (
+    <div className="mx-2 mb-2">
+      <div className="rounded-lg border border-border/50 overflow-hidden">
+        <div
+          className={cn(
+            "flex items-center gap-2 px-2 h-8 select-none group",
+            !headerBg && "bg-muted/30",
+          )}
+          style={headerBg ? { backgroundColor: headerBg } : undefined}
+        >
+          {customHeader ? (
+            <div className="flex-1 min-w-0 flex items-center gap-1">
+              {customHeader}
+            </div>
+          ) : (
+            <>
+              <Icon className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+              <span className="text-xs font-medium text-foreground flex-1">
+                {title}
+              </span>
+              {badge}
+            </>
+          )}
+          {canExpand && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={onExpand}
+                  className="h-5 w-5 p-0 hover:bg-foreground/10 text-muted-foreground hover:text-foreground rounded-md opacity-0 group-hover:opacity-100 transition-[background-color,opacity,transform] duration-150 ease-out active:scale-[0.97] flex-shrink-0"
+                  aria-label={`Expand ${widgetId}`}
+                >
+                  <ArrowUpRight className="h-3 w-3" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="left">Expand to sidebar</TooltipContent>
+            </Tooltip>
+          )}
+        </div>
+        <div>{children}</div>
+      </div>
+    </div>
+  )
+}
+
+// ============================================================================
+// DetailsSidebar
+// ============================================================================
 
 interface DetailsSidebarProps {
   /** Workspace/chat ID */
@@ -87,6 +188,8 @@ interface DetailsSidebarProps {
   onExpandDiff?: () => void
   /** Callback when a file is selected in Changes widget - opens diff with file selected */
   onFileSelect?: (filePath: string) => void
+  /** Callback when a file is opened from Files tab - opens in file viewer */
+  onOpenFile?: (absolutePath: string) => void
   /** Remote chat info for sandbox workspaces */
   remoteInfo?: {
     repository?: string
@@ -123,11 +226,23 @@ export function DetailsSidebar({
   onExpandPlan,
   onExpandDiff,
   onFileSelect,
+  onOpenFile,
   remoteInfo,
   isRemoteChat = false,
 }: DetailsSidebarProps) {
   // Global sidebar open state
   const [isOpen, setIsOpen] = useAtom(detailsSidebarOpenAtom)
+
+  // Active tab state (Details / Files)
+  const [activeTab, setActiveTab] = useAtom(detailsSidebarTabAtom)
+
+  // Files tab ref for header actions
+  const filesTabRef = useRef<FilesTabHandle>(null)
+  const [filesAllExpanded, setFilesAllExpanded] = useState(false)
+
+  // Current file open in file viewer (for tree highlight sync)
+  const fileViewerAtom = useMemo(() => fileViewerOpenAtomFamily(chatId), [chatId])
+  const fileViewerPath = useAtomValue(fileViewerAtom)
 
   // Settings dialog atoms for MCP settings
   const setSettingsOpen = useSetAtom(agentsSettingsDialogOpenAtom)
@@ -157,38 +272,15 @@ export function DetailsSidebar({
     setIsOpen(false)
   }, [setIsOpen])
 
-  // Resolved hotkey for tooltip
+  // Resolved hotkeys for tooltips
   const toggleDetailsHotkey = useResolvedHotkeyDisplay("toggle-details")
-
-  // Expand widget to legacy sidebar
-  const handleExpandWidget = useCallback(
-    (widgetId: WidgetId) => {
-      switch (widgetId) {
-        case "terminal":
-          onExpandTerminal?.()
-          break
-        case "plan":
-          onExpandPlan?.()
-          break
-        case "diff":
-          onExpandDiff?.()
-          break
-      }
-    },
-    [onExpandTerminal, onExpandPlan, onExpandDiff],
-  )
+  const fileSearchHotkey = useResolvedHotkeyDisplay("file-search")
 
   // Check if a widget should be shown
   const isWidgetVisible = useCallback(
     (widgetId: WidgetId) => visibleWidgets.includes(widgetId),
     [visibleWidgets],
   )
-
-  // Check if a widget can be expanded
-  const canWidgetExpand = useCallback((widgetId: WidgetId) => {
-    const config = WIDGET_REGISTRY.find((w) => w.id === widgetId)
-    return config?.canExpand ?? false
-  }, [])
 
   // Keyboard shortcut: Cmd+Shift+\ to toggle details sidebar
   useEffect(() => {
@@ -210,111 +302,8 @@ export function DetailsSidebar({
     return () => window.removeEventListener("keydown", handleKeyDown, true)
   }, [setIsOpen, isOpen])
 
-  // Get icon for widget
-  const getWidgetIcon = useCallback((widgetId: WidgetId) => {
-    switch (widgetId) {
-      case "info":
-        return Box
-      case "usage":
-        return Gauge
-      case "todo":
-        return ListTodo
-      case "plan":
-        return PlanIcon
-      case "terminal":
-        return TerminalSquare
-      case "diff":
-        return DiffIcon
-      case "mcp":
-        return OriginalMCPIcon
-      default:
-        return Box
-    }
-  }, [])
-
-  // Widget Card Component - always expanded, no collapse functionality
-  const WidgetCard = useCallback(
-    ({
-      widgetId,
-      title,
-      badge,
-      children,
-      customHeader,
-      headerBg,
-      hideExpand,
-    }: {
-      widgetId: WidgetId
-      title: string
-      badge?: React.ReactNode
-      children: React.ReactNode
-      /** Custom header content (replaces default icon + title) */
-      customHeader?: React.ReactNode
-      /** Custom background color for header */
-      headerBg?: string
-      /** Hide the expand button (when custom actions are in badge) */
-      hideExpand?: boolean
-    }) => {
-      const Icon = getWidgetIcon(widgetId)
-      const canExpand = canWidgetExpand(widgetId) && !hideExpand
-
-      return (
-        <div className="mx-2 mb-2">
-          <div
-            className={cn(
-              "rounded-lg border border-border/50 overflow-hidden",
-            )}
-          >
-            {/* Widget Header - fixed height h-8 for consistency */}
-            <div
-              className={cn(
-                "flex items-center gap-2 px-2 h-8 select-none group",
-                !headerBg && "bg-muted/30",
-              )}
-              style={headerBg ? { backgroundColor: headerBg } : undefined}
-            >
-              {customHeader ? (
-                // Custom header content (e.g., terminal tabs)
-                <div className="flex-1 min-w-0 flex items-center gap-1">
-                  {customHeader}
-                </div>
-              ) : (
-                // Default header with icon and title
-                <>
-                  <Icon className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                  <span className="text-xs font-medium text-foreground flex-1">
-                    {title}
-                  </span>
-                  {badge}
-                </>
-              )}
-
-              {/* Expand to sidebar button */}
-              {canExpand && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => handleExpandWidget(widgetId)}
-                      className="h-5 w-5 p-0 hover:bg-foreground/10 text-muted-foreground hover:text-foreground rounded-md opacity-0 group-hover:opacity-100 transition-[background-color,opacity,transform] duration-150 ease-out active:scale-[0.97] flex-shrink-0"
-                      aria-label={`Expand ${widgetId}`}
-                    >
-                      <ArrowUpRight className="h-3 w-3" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="left">Expand to sidebar</TooltipContent>
-                </Tooltip>
-              )}
-            </div>
-
-            {/* Widget Content - always visible */}
-            <div>{children}</div>
-          </div>
-        </div>
-      )
-    },
-    [getWidgetIcon, canWidgetExpand, handleExpandWidget],
-  )
+  // Stable noop callback for when onOpenFile is not provided
+  const noopSelectFile = useCallback(() => {}, [])
 
   return (
     <ResizableSidebar
@@ -332,7 +321,7 @@ export function DetailsSidebar({
       style={{ borderLeftWidth: "0.5px", overflow: "hidden" }}
     >
       <div className="flex flex-col h-full min-w-0 overflow-hidden">
-        {/* Header */}
+        {/* Header with pill tabs */}
         <div className="flex items-center justify-between px-2 h-10 bg-tl-background flex-shrink-0 border-b border-border/50">
           <div className="flex items-center gap-2">
             <Tooltip>
@@ -352,13 +341,82 @@ export function DetailsSidebar({
                 {toggleDetailsHotkey && <Kbd>{toggleDetailsHotkey}</Kbd>}
               </TooltipContent>
             </Tooltip>
-            <span className="text-sm font-medium">Details</span>
+
+            {/* Pill tabs */}
+            <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-muted/50">
+              <button
+                type="button"
+                onClick={() => setActiveTab("details")}
+                className={cn(
+                  "px-2.5 py-1 text-xs font-medium rounded-md transition-colors",
+                  activeTab === "details"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                Details
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("files")}
+                className={cn(
+                  "px-2.5 py-1 text-xs font-medium rounded-md transition-colors",
+                  activeTab === "files"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                Files
+              </button>
+            </div>
           </div>
-          <WidgetSettingsPopup workspaceId={chatId} isRemoteChat={isRemoteChat} />
+
+          {/* Right-side header actions */}
+          {activeTab === "details" ? (
+            <WidgetSettingsPopup workspaceId={chatId} isRemoteChat={isRemoteChat} />
+          ) : (
+            <div className="flex items-center gap-0.5">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => filesTabRef.current?.openSearch()}
+                    className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
+                  >
+                    <SearchIcon className="size-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  Search files
+                  {fileSearchHotkey && <Kbd>{fileSearchHotkey}</Kbd>}
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => filesTabRef.current?.toggleExpandCollapse()}
+                    className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
+                  >
+                    {filesAllExpanded ? (
+                      <CollapseIcon className="size-3.5" />
+                    ) : (
+                      <ExpandIcon className="size-3.5" />
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {filesAllExpanded ? "Collapse all" : "Expand all"}
+                </TooltipContent>
+              </Tooltip>
+            </div>
+          )}
         </div>
 
-        {/* Widget Cards - rendered in user-defined order */}
-        <div className="flex-1 overflow-y-auto py-2">
+        {/* Tab content — both tabs always mounted to preserve state */}
+        <div className={cn("flex-1 overflow-y-auto py-2", activeTab !== "details" && "hidden")}>
           {widgetOrder.map((widgetId) => {
             // Skip if widget is not visible
             if (!isWidgetVisible(widgetId)) return null
@@ -374,9 +432,6 @@ export function DetailsSidebar({
                     />
                   </WidgetCard>
                 )
-
-              case "usage":
-                return <UsageWidget key="usage" />
 
               case "todo":
                 return (
@@ -473,6 +528,14 @@ export function DetailsSidebar({
             }
           })}
         </div>
+        <FilesTab
+          ref={filesTabRef}
+          worktreePath={worktreePath}
+          onSelectFile={onOpenFile ?? noopSelectFile}
+          onExpandedStateChange={setFilesAllExpanded}
+          currentViewerFilePath={fileViewerPath}
+          className={cn("flex-1", activeTab !== "files" && "hidden")}
+        />
       </div>
     </ResizableSidebar>
   )

@@ -5,6 +5,7 @@ import { getAuthManager } from "../../../index"
 import { anthropicAccounts, anthropicSettings, claudeCodeCredentials, getDatabase } from "../../db"
 import { createId } from "../../db/utils"
 import { publicProcedure, router } from "../index"
+import { clearClaudeCaches } from "./claude"
 
 /**
  * Encrypt token using Electron's safeStorage
@@ -220,6 +221,22 @@ export const anthropicAccountsRouter = router({
         .set({ lastUsedAt: new Date() })
         .where(eq(anthropicAccounts.id, input.accountId))
         .run()
+
+      // Sync legacy table so all code paths use the correct token
+      db.delete(claudeCodeCredentials)
+        .where(eq(claudeCodeCredentials.id, "default"))
+        .run()
+
+      db.insert(claudeCodeCredentials)
+        .values({
+          id: "default",
+          oauthToken: account.oauthToken,
+          connectedAt: new Date(),
+        })
+        .run()
+
+      // Clear cached SDK state to ensure fresh token is used
+      clearClaudeCaches()
 
       console.log(`[AnthropicAccounts] Switched to account: ${input.accountId}`)
       return { success: true }

@@ -8,11 +8,13 @@ export interface PastedTextFile {
   size: number
   preview: string
   createdAt: Date
+  kind?: "pasted" | "chatHistory"
 }
 
 export interface UsePastedTextFilesReturn {
   pastedTexts: PastedTextFile[]
   addPastedText: (text: string) => Promise<void>
+  addChatHistoryFile: (file: PastedTextFile) => void
   removePastedText: (id: string) => void
   clearPastedTexts: () => void
   pastedTextsRef: React.RefObject<PastedTextFile[]>
@@ -63,6 +65,11 @@ export function usePastedTextFiles(subChatId: string): UsePastedTextFilesReturn 
     setPastedTexts([])
   }, [])
 
+  // Add a pre-built chat history file directly
+  const addChatHistoryFile = useCallback((file: PastedTextFile) => {
+    setPastedTexts((prev) => [...prev, file])
+  }, [])
+
   // Direct state setter for restoring from draft/rollback
   const setPastedTextsFromDraft = useCallback((texts: PastedTextFile[]) => {
     setPastedTexts(texts)
@@ -72,6 +79,7 @@ export function usePastedTextFiles(subChatId: string): UsePastedTextFilesReturn 
   return {
     pastedTexts,
     addPastedText,
+    addChatHistoryFile,
     removePastedText,
     clearPastedTexts,
     pastedTextsRef,

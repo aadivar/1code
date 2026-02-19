@@ -27,6 +27,7 @@ export type RemoteChat = {
   sandbox_id: string | null
   meta: {
     repository?: string
+    github_repo?: string // Automation-created chats use this field
     branch?: string | null
     originalSandboxId?: string | null
     isQuickSetup?: boolean

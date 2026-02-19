@@ -107,8 +107,16 @@ contextBridge.exposeInMainWorld("desktopApi", {
   getZoom: () => ipcRenderer.invoke("window:get-zoom"),
 
   // Multi-window
-  newWindow: (options?: { chatId?: string; subChatId?: string; splitPaneIds?: string[] }) => ipcRenderer.invoke("window:new", options),
+  newWindow: (options?: { chatId?: string; subChatId?: string }) =>
+    ipcRenderer.invoke("window:new", options) as Promise<{ blocked: boolean } | void>,
   setWindowTitle: (title: string) => ipcRenderer.invoke("window:set-title", title),
+
+  // Chat ownership — prevent same chat open in multiple windows
+  claimChat: (chatId: string) =>
+    ipcRenderer.invoke("chat:claim", chatId) as Promise<{ ok: true } | { ok: false; ownerStableId: string }>,
+  releaseChat: (chatId: string) => ipcRenderer.invoke("chat:release", chatId) as Promise<void>,
+  focusChatOwner: (chatId: string) =>
+    ipcRenderer.invoke("chat:focus-owner", chatId) as Promise<boolean>,
 
   // DevTools
   toggleDevTools: () => ipcRenderer.invoke("window:toggle-devtools"),
@@ -202,6 +210,11 @@ contextBridge.exposeInMainWorld("desktopApi", {
     const handler = () => callback()
     ipcRenderer.on("shortcut:new-agent", handler)
     return () => ipcRenderer.removeListener("shortcut:new-agent", handler)
+  },
+  onShortcutOpenSettings: (callback: () => void) => {
+    const handler = () => callback()
+    ipcRenderer.on("shortcut:open-settings", handler)
+    return () => ipcRenderer.removeListener("shortcut:open-settings", handler)
   },
 
   // File change events (from Claude Write/Edit tools)
@@ -307,8 +320,12 @@ export interface DesktopApi {
   zoomReset: () => Promise<void>
   getZoom: () => Promise<number>
   // Multi-window
-  newWindow: (options?: { chatId?: string; subChatId?: string; splitPaneIds?: string[] }) => Promise<void>
+  newWindow: (options?: { chatId?: string; subChatId?: string }) => Promise<{ blocked: boolean } | void>
   setWindowTitle: (title: string) => Promise<void>
+  // Chat ownership — prevent same chat open in multiple windows
+  claimChat: (chatId: string) => Promise<{ ok: true } | { ok: false; ownerStableId: string }>
+  releaseChat: (chatId: string) => Promise<void>
+  focusChatOwner: (chatId: string) => Promise<boolean>
   toggleDevTools: () => Promise<void>
   unlockDevTools: () => Promise<void>
   setAnalyticsOptOut: (optedOut: boolean) => Promise<void>
@@ -357,6 +374,7 @@ export interface DesktopApi {
   onAuthError: (callback: (error: string) => void) => () => void
   // Shortcuts
   onShortcutNewAgent: (callback: () => void) => () => void
+  onShortcutOpenSettings: (callback: () => void) => () => void
   // File changes
   onFileChanged: (callback: (data: { filePath: string; type: string; subChatId: string }) => void) => () => void
   // Git status changes (from file watcher)

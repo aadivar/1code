@@ -1,8 +1,8 @@
 import { z } from "zod"
 import { router, publicProcedure } from "../index"
-import { readdir, stat, readFile, writeFile, mkdir } from "node:fs/promises"
-import { join, relative, basename, extname } from "node:path"
-import { app } from "electron"
+import { readdir, stat, readFile, writeFile, mkdir, rename as fsRename, rm } from "node:fs/promises"
+import { join, relative, basename, extname, dirname, resolve, isAbsolute } from "node:path"
+import { app, shell } from "electron"
 import { watch } from "node:fs"
 import { observable } from "@trpc/server/observable"
 
@@ -65,9 +65,42 @@ interface FileEntry {
   type: "file" | "folder"
 }
 
-// Cache for file and folder listings
+// Cache for file and folder listings (bounded LRU)
+const MAX_CACHE_ENTRIES = 20
 const fileListCache = new Map<string, { entries: FileEntry[]; timestamp: number }>()
 const CACHE_TTL = 5000 // 5 seconds
+
+/**
+ * Validate that a path doesn't contain path traversal attacks.
+ * Checks for null bytes and ensures the resolved path stays within the expected parent.
+ */
+function validatePathSafe(targetPath: string, allowedParent?: string): void {
+  if (targetPath.includes("\0")) {
+    throw new Error("Path contains invalid characters")
+  }
+  if (!isAbsolute(targetPath)) {
+    throw new Error("Path must be absolute")
+  }
+  const resolved = resolve(targetPath)
+  if (allowedParent) {
+    const resolvedParent = resolve(allowedParent)
+    if (!resolved.startsWith(resolvedParent + "/") && resolved !== resolvedParent) {
+      throw new Error("Path escapes allowed directory")
+    }
+  }
+}
+
+function validateFileName(name: string): void {
+  if (name.includes("/") || name.includes("\\")) {
+    throw new Error("File name cannot contain path separators")
+  }
+  if (name.includes("\0")) {
+    throw new Error("File name contains invalid characters")
+  }
+  if (name === "." || name === "..") {
+    throw new Error("Invalid file name")
+  }
+}
 
 /**
  * Recursively scan a directory and return all file and folder paths
@@ -135,8 +168,21 @@ async function getEntryList(projectPath: string): Promise<FileEntry[]> {
   }
 
   const entries = await scanDirectory(projectPath)
-  fileListCache.set(projectPath, { entries, timestamp: now })
 
+  // Evict oldest entries if cache is full
+  if (fileListCache.size >= MAX_CACHE_ENTRIES) {
+    let oldest: string | null = null
+    let oldestTime = Infinity
+    for (const [key, val] of fileListCache) {
+      if (val.timestamp < oldestTime) {
+        oldestTime = val.timestamp
+        oldest = key
+      }
+    }
+    if (oldest) fileListCache.delete(oldest)
+  }
+
+  fileListCache.set(projectPath, { entries, timestamp: now })
   return entries
 }
 
@@ -146,14 +192,18 @@ async function getEntryList(projectPath: string): Promise<FileEntry[]> {
 function filterEntries(
   entries: FileEntry[],
   query: string,
-  limit: number
+  limit: number,
+  typeFilter?: "file" | "folder",
 ): Array<{ id: string; label: string; path: string; repository: string; type: "file" | "folder" }> {
   const queryLower = query.toLowerCase()
 
-  // Filter entries that match the query
+  // Filter entries that match the query and optional type filter
   let filtered = entries
+  if (typeFilter) {
+    filtered = filtered.filter((entry) => entry.type === typeFilter)
+  }
   if (query) {
-    filtered = entries.filter((entry) => {
+    filtered = filtered.filter((entry) => {
       const name = basename(entry.path).toLowerCase()
       const pathLower = entry.path.toLowerCase()
       return name.includes(queryLower) || pathLower.includes(queryLower)
@@ -198,7 +248,7 @@ function filterEntries(
   })
 
   // Limit results
-  const limited = filtered.slice(0, Math.min(limit, 200))
+  const limited = filtered.slice(0, Math.min(limit, 5000))
 
   // Map to expected format with type
   return limited.map((entry) => ({
@@ -219,11 +269,12 @@ export const filesRouter = router({
       z.object({
         projectPath: z.string(),
         query: z.string().default(""),
-        limit: z.number().min(1).max(200).default(50),
+        limit: z.number().min(1).max(5000).default(50),
+        typeFilter: z.enum(["file", "folder"]).optional(),
       })
     )
     .query(async ({ input }) => {
-      const { projectPath, query, limit } = input
+      const { projectPath, query, limit, typeFilter } = input
 
       if (!projectPath) {
         return []
@@ -239,16 +290,9 @@ export const filesRouter = router({
 
         // Get entry list (cached or fresh scan)
         const entries = await getEntryList(projectPath)
-        
-        // Debug: log folder count
-        const folderCount = entries.filter(e => e.type === "folder").length
-        const fileCount = entries.filter(e => e.type === "file").length
-        console.log(`[files] Scanned ${projectPath}: ${folderCount} folders, ${fileCount} files`)
 
         // Filter and sort by query
-        const results = filterEntries(entries, query, limit)
-        console.log(`[files] Query "${query}": returning ${results.length} results, folders: ${results.filter(r => r.type === "folder").length}`)
-        return results
+        return filterEntries(entries, query, limit, typeFilter)
       } catch (error) {
         console.error(`[files] Error searching files:`, error)
         return []
@@ -407,7 +451,14 @@ export const filesRouter = router({
 
       // Generate filename with timestamp
       const finalFilename = filename || `pasted_${Date.now()}.txt`
+
+      // Validate filename doesn't contain path separators or null bytes
+      validateFileName(finalFilename)
+
       const filePath = join(pastedDir, finalFilename)
+
+      // Ensure the resolved path stays within the pasted directory
+      validatePathSafe(filePath, pastedDir)
 
       // Write file
       await writeFile(filePath, text, "utf-8")
@@ -419,5 +470,42 @@ export const filesRouter = router({
         filename: finalFilename,
         size: text.length,
       }
+    }),
+
+  /**
+   * Rename a file or folder
+   */
+  renameFile: publicProcedure
+    .input(z.object({
+      absolutePath: z.string(),
+      newName: z.string().min(1),
+    }))
+    .mutation(async ({ input }) => {
+      const { absolutePath, newName } = input
+
+      validatePathSafe(absolutePath)
+      validateFileName(newName)
+
+      const dir = dirname(absolutePath)
+      const newPath = join(dir, newName)
+
+      // Ensure the new path stays in the same directory
+      validatePathSafe(newPath, dir)
+
+      await fsRename(absolutePath, newPath)
+      return { success: true, newPath }
+    }),
+
+  /**
+   * Delete a file or folder (move to trash)
+   */
+  deleteFile: publicProcedure
+    .input(z.object({
+      absolutePath: z.string(),
+    }))
+    .mutation(async ({ input }) => {
+      validatePathSafe(input.absolutePath)
+      await shell.trashItem(input.absolutePath)
+      return { success: true }
     }),
 })

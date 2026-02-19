@@ -277,4 +277,31 @@ export const skillsRouter = router({
 
       return { success: true }
     }),
+
+  /**
+   * Delete a skill directory
+   */
+  delete: publicProcedure
+    .input(
+      z.object({
+        path: z.string(),
+        cwd: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      if (input.path.includes("..")) {
+        throw new Error("Invalid path")
+      }
+
+      const absolutePath = input.cwd && !input.path.startsWith("~") && !input.path.startsWith("/")
+        ? path.join(input.cwd, input.path)
+        : resolveSkillPath(input.path)
+
+      // Skills are directories containing SKILL.md — delete the parent directory
+      const skillDir = path.dirname(absolutePath)
+      await fs.access(skillDir)
+      await fs.rm(skillDir, { recursive: true })
+
+      return { success: true }
+    }),
 })

@@ -25,6 +25,10 @@ import {
 } from "../atoms"
 import {
   selectedTeamIdAtom,
+  billingMethodAtom,
+  anthropicOnboardingCompletedAtom,
+  apiKeyOnboardingCompletedAtom,
+  codexOnboardingCompletedAtom,
   agentsQuickSwitchOpenAtom,
   agentsQuickSwitchSelectedIndexAtom,
   subChatsQuickSwitchOpenAtom,
@@ -46,6 +50,7 @@ import { AgentsSubChatsSidebar } from "../../sidebar/agents-subchats-sidebar"
 import { AgentPreview } from "./agent-preview"
 import { AgentDiffView } from "./agent-diff-view"
 import { TerminalSidebar, terminalSidebarOpenAtomFamily } from "../../terminal"
+import { getTerminalScopeKey } from "../../terminal/utils"
 import {
   useAgentSubChatStore,
   type SubChatMeta,
@@ -79,6 +84,12 @@ export function AgentsContent() {
   const betaKanbanEnabled = useAtomValue(betaKanbanEnabledAtom)
   const [betaAutomationsEnabled, setBetaAutomationsEnabled] = useAtom(betaAutomationsEnabledAtom)
   const [selectedTeamId] = useAtom(selectedTeamIdAtom)
+  const setBillingMethod = useSetAtom(billingMethodAtom)
+  const setAnthropicOnboardingCompleted = useSetAtom(
+    anthropicOnboardingCompletedAtom,
+  )
+  const setApiKeyOnboardingCompleted = useSetAtom(apiKeyOnboardingCompletedAtom)
+  const setCodexOnboardingCompleted = useSetAtom(codexOnboardingCompletedAtom)
   const [sidebarOpen, setSidebarOpen] = useAtom(agentsSidebarOpenAtom)
   const [previewSidebarOpen, setPreviewSidebarOpen] = useAtom(
     agentsPreviewSidebarOpenAtom,
@@ -756,6 +767,11 @@ export function AgentsContent() {
   // Note: Cmd+E archive hotkey is handled in AgentsSidebar to share undo stack
 
   const handleSignOut = async () => {
+    setBillingMethod(null)
+    setAnthropicOnboardingCompleted(false)
+    setApiKeyOnboardingCompleted(false)
+    setCodexOnboardingCompleted(false)
+
     // Check if running in Electron desktop app
     if (typeof window !== "undefined" && window.desktopApi) {
       // Use desktop logout which clears the token and shows login page
@@ -826,6 +842,16 @@ export function AgentsContent() {
   const worktreePath = (chatData as any)?.worktreePath as string | undefined
   const canShowTerminal = !!worktreePath
 
+  // Terminal scope key for shared terminals
+  const terminalScopeKey = useMemo(() => {
+    if (!selectedChatId || !worktreePath) return `ws:${selectedChatId || "none"}`
+    return getTerminalScopeKey({
+      branch: (chatData as any)?.branch ?? null,
+      worktreePath: worktreePath,
+      id: selectedChatId,
+    })
+  }, [(chatData as any)?.branch, worktreePath, selectedChatId])
+
   // Mobile layout - completely different structure
   if (isMobile) {
     return (
@@ -879,6 +905,7 @@ export function AgentsContent() {
           // Terminal Mode - fullscreen terminal
           <TerminalSidebar
             chatId={selectedChatId}
+            scopeKey={terminalScopeKey}
             cwd={worktreePath!}
             workspaceId={selectedChatId}
             isMobileFullscreen={true}

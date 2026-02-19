@@ -337,6 +337,23 @@ export class TerminalManager extends EventEmitter {
 	}
 
 	/**
+	 * Get all alive sessions for a given scope key.
+	 * Used by new workspaces to discover shared terminals.
+	 */
+	getSessionsByScopeKey(
+		scopeKey: string,
+	): Array<{ paneId: string; cwd: string; lastActive: number }> {
+		return Array.from(this.sessions.values())
+			.filter((session) => session.scopeKey === scopeKey && session.isAlive)
+			.map((session) => ({
+				paneId: session.paneId,
+				cwd: session.cwd,
+				lastActive: session.lastActive,
+			}))
+	}
+
+
+	/**
 	 * Send a newline to all terminals in a workspace to refresh their prompts.
 	 * Useful after switching branches to update the branch name in prompts.
 	 */

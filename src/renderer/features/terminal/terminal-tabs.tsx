@@ -131,13 +131,33 @@ const TerminalTab = memo(
       [handleSave, terminal.name, onEditingChange],
     )
 
+    // Track when editing starts to ignore immediate blur events
+    // caused by context menu focus restoration
+    const editStartTimeRef = useRef(0)
+
     const handleBlur = useCallback(() => {
+      // Ignore blur events that happen within 200ms of editing start.
+      // When "Rename terminal" is clicked from the context menu, Radix UI
+      // restores focus to the trigger element after the menu closes,
+      // which steals focus from the input and fires an immediate blur.
+      const elapsed = Date.now() - editStartTimeRef.current
+      if (elapsed < 200) {
+        // Re-focus the input after the context menu focus restoration settles
+        requestAnimationFrame(() => {
+          if (inputRef.current) {
+            inputRef.current.focus()
+            inputRef.current.select()
+          }
+        })
+        return
+      }
       handleSave()
     }, [handleSave])
 
     // Focus input when editing starts
     useEffect(() => {
       if (isEditing && inputRef.current) {
+        editStartTimeRef.current = Date.now()
         setEditValue(terminal.name)
         // Use requestAnimationFrame to ensure DOM is ready
         requestAnimationFrame(() => {

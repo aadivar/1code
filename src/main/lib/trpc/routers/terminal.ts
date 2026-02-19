@@ -18,6 +18,7 @@ export const terminalRouter = router({
 				paneId: z.string().min(1),
 				tabId: z.string().optional(),
 				workspaceId: z.string().optional(),
+				scopeKey: z.string().optional(),
 				cols: z.number().int().positive().optional(),
 				rows: z.number().int().positive().optional(),
 				cwd: z.string().optional(),
@@ -129,6 +130,16 @@ export const terminalRouter = router({
 		.input(z.object({ workspaceId: z.string() }))
 		.query(({ input }) => {
 			return terminalManager.getSessionCountByWorkspaceId(input.workspaceId)
+		}),
+
+	/**
+	 * List alive terminal sessions for a given scope key.
+	 * Used by new workspaces to discover shared terminals (local mode).
+	 */
+	listSessionsByScopeKey: publicProcedure
+		.input(z.object({ scopeKey: z.string() }))
+		.query(({ input }) => {
+			return terminalManager.getSessionsByScopeKey(input.scopeKey)
 		}),
 
 	/**

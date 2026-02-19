@@ -39,6 +39,7 @@ import {
 } from "./atoms"
 import { trpc } from "@/lib/trpc"
 import type { TerminalInstance } from "./types"
+import { isSharedTerminalScope } from "./utils"
 
 // Animation constants - keep in sync with ResizableSidebar animationDuration
 const SIDEBAR_ANIMATION_DURATION_SECONDS = 0 // Disabled for performance
@@ -46,8 +47,10 @@ const SIDEBAR_ANIMATION_DURATION_MS = 0
 const ANIMATION_BUFFER_MS = 0
 
 interface TerminalSidebarProps {
-  /** Chat ID - used to scope terminals to this chat */
+  /** Chat ID - used for sidebar open/close state */
   chatId: string
+  /** Scope key for terminal sharing: "path:<dir>" (shared) or "ws:<chatId>" (isolated) */
+  scopeKey: string
   cwd: string
   workspaceId: string
   tabId?: string
@@ -68,8 +71,8 @@ function generateTerminalId(): string {
 /**
  * Generate a paneId for TerminalManager
  */
-function generatePaneId(chatId: string, terminalId: string): string {
-  return `${chatId}:term:${terminalId}`
+function generatePaneId(scopeKey: string, terminalId: string): string {
+  return `${scopeKey}:term:${terminalId}`
 }
 
 /**
@@ -135,6 +138,7 @@ function TerminalModeSwitcher({
 
 export function TerminalSidebar({
   chatId,
+  scopeKey,
   cwd,
   workspaceId,
   tabId,
@@ -142,7 +146,7 @@ export function TerminalSidebar({
   isMobileFullscreen = false,
   onClose,
 }: TerminalSidebarProps) {
-  // Per-chat terminal sidebar state
+  // Per-chat terminal sidebar state (sidebar open/close is per-workspace, not per-scope)
   const terminalSidebarAtom = useMemo(
     () => terminalSidebarOpenAtomFamily(chatId),
     [chatId],
@@ -172,16 +176,16 @@ export function TerminalSidebar({
     return getDefaultTerminalBg(isDark)
   }, [isDark, fullThemeData])
 
-  // Get terminals for this chat
+  // Get terminals for this scope (shared by path for local mode, isolated for worktree)
   const terminals = useMemo(
-    () => allTerminals[chatId] || [],
-    [allTerminals, chatId],
+    () => allTerminals[scopeKey] || [],
+    [allTerminals, scopeKey],
   )
 
-  // Get active terminal ID for this chat
+  // Get active terminal ID for this scope
   const activeTerminalId = useMemo(
-    () => allActiveIds[chatId] || null,
-    [allActiveIds, chatId],
+    () => allActiveIds[scopeKey] || null,
+    [allActiveIds, scopeKey],
   )
 
   // Get the active terminal instance
@@ -192,10 +196,11 @@ export function TerminalSidebar({
 
   // tRPC mutation for killing terminal sessions
   const killMutation = trpc.terminal.kill.useMutation()
+  const trpcUtils = trpc.useUtils()
 
   // Refs to avoid callback recreation
-  const chatIdRef = useRef(chatId)
-  chatIdRef.current = chatId
+  const scopeKeyRef = useRef(scopeKey)
+  scopeKeyRef.current = scopeKey
   const terminalsRef = useRef(terminals)
   terminalsRef.current = terminals
   const activeTerminalIdRef = useRef(activeTerminalId)
@@ -203,11 +208,11 @@ export function TerminalSidebar({
 
   // Create a new terminal - stable callback
   const createTerminal = useCallback(() => {
-    const currentChatId = chatIdRef.current
+    const currentScopeKey = scopeKeyRef.current
     const currentTerminals = terminalsRef.current
 
     const id = generateTerminalId()
-    const paneId = generatePaneId(currentChatId, id)
+    const paneId = generatePaneId(currentScopeKey, id)
     const name = getNextTerminalName(currentTerminals)
 
     const newTerminal: TerminalInstance = {
@@ -219,23 +224,23 @@ export function TerminalSidebar({
 
     setAllTerminals((prev) => ({
       ...prev,
-      [currentChatId]: [...(prev[currentChatId] || []), newTerminal],
+      [currentScopeKey]: [...(prev[currentScopeKey] || []), newTerminal],
     }))
 
     // Set as active
     setAllActiveIds((prev) => ({
       ...prev,
-      [currentChatId]: id,
+      [currentScopeKey]: id,
     }))
   }, [setAllTerminals, setAllActiveIds])
 
   // Select a terminal - stable callback
   const selectTerminal = useCallback(
     (id: string) => {
-      const currentChatId = chatIdRef.current
+      const currentScopeKey = scopeKeyRef.current
       setAllActiveIds((prev) => ({
         ...prev,
-        [currentChatId]: id,
+        [currentScopeKey]: id,
       }))
     },
     [setAllActiveIds],
@@ -244,7 +249,7 @@ export function TerminalSidebar({
   // Close a terminal - stable callback
   const closeTerminal = useCallback(
     (id: string) => {
-      const currentChatId = chatIdRef.current
+      const currentScopeKey = scopeKeyRef.current
       const currentTerminals = terminalsRef.current
       const currentActiveId = activeTerminalIdRef.current
 
@@ -258,7 +263,7 @@ export function TerminalSidebar({
       const newTerminals = currentTerminals.filter((t) => t.id !== id)
       setAllTerminals((prev) => ({
         ...prev,
-        [currentChatId]: newTerminals,
+        [currentScopeKey]: newTerminals,
       }))
 
       // If we closed the active terminal, switch to another
@@ -266,7 +271,7 @@ export function TerminalSidebar({
         const newActive = newTerminals[newTerminals.length - 1]?.id || null
         setAllActiveIds((prev) => ({
           ...prev,
-          [currentChatId]: newActive,
+          [currentScopeKey]: newActive,
         }))
       }
     },
@@ -276,10 +281,10 @@ export function TerminalSidebar({
   // Rename a terminal - stable callback
   const renameTerminal = useCallback(
     (id: string, name: string) => {
-      const currentChatId = chatIdRef.current
+      const currentScopeKey = scopeKeyRef.current
       setAllTerminals((prev) => ({
         ...prev,
-        [currentChatId]: (prev[currentChatId] || []).map((t) =>
+        [currentScopeKey]: (prev[currentScopeKey] || []).map((t) =>
           t.id === id ? { ...t, name } : t,
         ),
       }))
@@ -290,7 +295,7 @@ export function TerminalSidebar({
   // Close other terminals - stable callback
   const closeOtherTerminals = useCallback(
     (id: string) => {
-      const currentChatId = chatIdRef.current
+      const currentScopeKey = scopeKeyRef.current
       const currentTerminals = terminalsRef.current
 
       // Kill all terminals except the one with the given id
@@ -304,13 +309,13 @@ export function TerminalSidebar({
       const remainingTerminal = currentTerminals.find((t) => t.id === id)
       setAllTerminals((prev) => ({
         ...prev,
-        [currentChatId]: remainingTerminal ? [remainingTerminal] : [],
+        [currentScopeKey]: remainingTerminal ? [remainingTerminal] : [],
       }))
 
       // Set the remaining terminal as active
       setAllActiveIds((prev) => ({
         ...prev,
-        [currentChatId]: id,
+        [currentScopeKey]: id,
       }))
     },
     [setAllTerminals, setAllActiveIds, killMutation],
@@ -319,7 +324,7 @@ export function TerminalSidebar({
   // Close terminals to the right - stable callback
   const closeTerminalsToRight = useCallback(
     (id: string) => {
-      const currentChatId = chatIdRef.current
+      const currentScopeKey = scopeKeyRef.current
       const currentTerminals = terminalsRef.current
 
       const index = currentTerminals.findIndex((t) => t.id === id)
@@ -335,7 +340,7 @@ export function TerminalSidebar({
       const remainingTerminals = currentTerminals.slice(0, index + 1)
       setAllTerminals((prev) => ({
         ...prev,
-        [currentChatId]: remainingTerminals,
+        [currentScopeKey]: remainingTerminals,
       }))
 
       // If active terminal was closed, switch to the last remaining one
@@ -346,7 +351,7 @@ export function TerminalSidebar({
       ) {
         setAllActiveIds((prev) => ({
           ...prev,
-          [currentChatId]:
+          [currentScopeKey]:
             remainingTerminals[remainingTerminals.length - 1]?.id || null,
         }))
       }
@@ -379,12 +384,39 @@ export function TerminalSidebar({
     }
   }, [isOpen])
 
-  // Auto-create first terminal when sidebar opens and no terminals exist
+  // Auto-create first terminal or discover shared terminals when sidebar opens
   useEffect(() => {
-    if (isOpen && terminals.length === 0) {
+    if (!isOpen || terminals.length > 0) return
+
+    if (isSharedTerminalScope(scopeKey)) {
+      // Shared scope (local mode): check backend for existing sessions
+      trpcUtils.terminal.listSessionsByScopeKey
+        .fetch({ scopeKey })
+        .then((sessions) => {
+          if (sessions.length > 0) {
+            // Reconstruct TerminalInstance records from existing backend sessions
+            const instances = sessions.map((s, i) => ({
+              id: s.paneId.split(":term:")[1] || generateTerminalId(),
+              paneId: s.paneId,
+              name: `Terminal ${i + 1}`,
+              createdAt: s.lastActive,
+            }))
+            setAllTerminals((prev) => ({ ...prev, [scopeKey]: instances }))
+            setAllActiveIds((prev) => ({
+              ...prev,
+              [scopeKey]: instances[0]?.id || null,
+            }))
+          } else {
+            createTerminal()
+          }
+        })
+        .catch(() => {
+          createTerminal()
+        })
+    } else {
       createTerminal()
     }
-  }, [isOpen, terminals.length, createTerminal])
+  }, [isOpen, terminals.length, scopeKey, createTerminal, trpcUtils, setAllTerminals, setAllActiveIds])
 
   // Note: Cmd+J keyboard shortcut is handled in active-chat.tsx
   // to ensure it works regardless of terminal display mode or focus state.
@@ -461,6 +493,7 @@ export function TerminalSidebar({
                 paneId={activeTerminal.paneId}
                 cwd={cwd}
                 workspaceId={workspaceId}
+                scopeKey={scopeKey}
                 tabId={tabId}
                 initialCommands={initialCommands}
                 initialCwd={cwd}
@@ -560,6 +593,7 @@ export function TerminalSidebar({
                 paneId={activeTerminal.paneId}
                 cwd={cwd}
                 workspaceId={workspaceId}
+                scopeKey={scopeKey}
                 tabId={tabId}
                 initialCommands={initialCommands}
                 initialCwd={cwd}
@@ -582,6 +616,7 @@ export function TerminalSidebar({
  */
 interface TerminalBottomPanelContentProps {
   chatId: string
+  scopeKey: string
   cwd: string
   workspaceId: string
   tabId?: string
@@ -591,6 +626,7 @@ interface TerminalBottomPanelContentProps {
 
 export function TerminalBottomPanelContent({
   chatId,
+  scopeKey,
   cwd,
   workspaceId,
   tabId,
@@ -601,6 +637,7 @@ export function TerminalBottomPanelContent({
   const [allActiveIds, setAllActiveIds] = useAtom(activeTerminalIdAtom)
   const terminalCwds = useAtomValue(terminalCwdAtom)
   const [displayMode, setDisplayMode] = useAtom(terminalDisplayModeAtom)
+  const trpcUtils = trpc.useUtils()
 
   const { resolvedTheme } = useTheme()
   const isDark = resolvedTheme === "dark"
@@ -618,12 +655,12 @@ export function TerminalBottomPanelContent({
   }, [isDark, fullThemeData])
 
   const terminals = useMemo(
-    () => allTerminals[chatId] || [],
-    [allTerminals, chatId],
+    () => allTerminals[scopeKey] || [],
+    [allTerminals, scopeKey],
   )
   const activeTerminalId = useMemo(
-    () => allActiveIds[chatId] || null,
-    [allActiveIds, chatId],
+    () => allActiveIds[scopeKey] || null,
+    [allActiveIds, scopeKey],
   )
   const activeTerminal = useMemo(
     () => terminals.find((t) => t.id === activeTerminalId) || null,
@@ -632,47 +669,47 @@ export function TerminalBottomPanelContent({
 
   const killMutation = trpc.terminal.kill.useMutation()
 
-  const chatIdRef = useRef(chatId)
-  chatIdRef.current = chatId
+  const scopeKeyRef = useRef(scopeKey)
+  scopeKeyRef.current = scopeKey
   const terminalsRef = useRef(terminals)
   terminalsRef.current = terminals
   const activeTerminalIdRef = useRef(activeTerminalId)
   activeTerminalIdRef.current = activeTerminalId
 
   const createTerminal = useCallback(() => {
-    const currentChatId = chatIdRef.current
+    const currentScopeKey = scopeKeyRef.current
     const currentTerminals = terminalsRef.current
     const id = generateTerminalId()
-    const paneId = generatePaneId(currentChatId, id)
+    const paneId = generatePaneId(currentScopeKey, id)
     const name = getNextTerminalName(currentTerminals)
     const newTerminal: TerminalInstance = { id, paneId, name, createdAt: Date.now() }
     setAllTerminals((prev) => ({
       ...prev,
-      [currentChatId]: [...(prev[currentChatId] || []), newTerminal],
+      [currentScopeKey]: [...(prev[currentScopeKey] || []), newTerminal],
     }))
-    setAllActiveIds((prev) => ({ ...prev, [currentChatId]: id }))
+    setAllActiveIds((prev) => ({ ...prev, [currentScopeKey]: id }))
   }, [setAllTerminals, setAllActiveIds])
 
   const selectTerminal = useCallback(
     (id: string) => {
-      setAllActiveIds((prev) => ({ ...prev, [chatIdRef.current]: id }))
+      setAllActiveIds((prev) => ({ ...prev, [scopeKeyRef.current]: id }))
     },
     [setAllActiveIds],
   )
 
   const closeTerminal = useCallback(
     (id: string) => {
-      const currentChatId = chatIdRef.current
+      const currentScopeKey = scopeKeyRef.current
       const currentTerminals = terminalsRef.current
       const currentActiveId = activeTerminalIdRef.current
       const terminal = currentTerminals.find((t) => t.id === id)
       if (!terminal) return
       killMutation.mutate({ paneId: terminal.paneId })
       const newTerminals = currentTerminals.filter((t) => t.id !== id)
-      setAllTerminals((prev) => ({ ...prev, [currentChatId]: newTerminals }))
+      setAllTerminals((prev) => ({ ...prev, [currentScopeKey]: newTerminals }))
       if (currentActiveId === id) {
         const newActive = newTerminals[newTerminals.length - 1]?.id || null
-        setAllActiveIds((prev) => ({ ...prev, [currentChatId]: newActive }))
+        setAllActiveIds((prev) => ({ ...prev, [currentScopeKey]: newActive }))
       }
     },
     [setAllTerminals, setAllActiveIds, killMutation],
@@ -680,10 +717,10 @@ export function TerminalBottomPanelContent({
 
   const renameTerminal = useCallback(
     (id: string, name: string) => {
-      const currentChatId = chatIdRef.current
+      const currentScopeKey = scopeKeyRef.current
       setAllTerminals((prev) => ({
         ...prev,
-        [currentChatId]: (prev[currentChatId] || []).map((t) =>
+        [currentScopeKey]: (prev[currentScopeKey] || []).map((t) =>
           t.id === id ? { ...t, name } : t,
         ),
       }))
@@ -693,7 +730,7 @@ export function TerminalBottomPanelContent({
 
   const closeOtherTerminals = useCallback(
     (id: string) => {
-      const currentChatId = chatIdRef.current
+      const currentScopeKey = scopeKeyRef.current
       const currentTerminals = terminalsRef.current
       currentTerminals.forEach((terminal) => {
         if (terminal.id !== id) {
@@ -703,16 +740,16 @@ export function TerminalBottomPanelContent({
       const remainingTerminal = currentTerminals.find((t) => t.id === id)
       setAllTerminals((prev) => ({
         ...prev,
-        [currentChatId]: remainingTerminal ? [remainingTerminal] : [],
+        [currentScopeKey]: remainingTerminal ? [remainingTerminal] : [],
       }))
-      setAllActiveIds((prev) => ({ ...prev, [currentChatId]: id }))
+      setAllActiveIds((prev) => ({ ...prev, [currentScopeKey]: id }))
     },
     [setAllTerminals, setAllActiveIds, killMutation],
   )
 
   const closeTerminalsToRight = useCallback(
     (id: string) => {
-      const currentChatId = chatIdRef.current
+      const currentScopeKey = scopeKeyRef.current
       const currentTerminals = terminalsRef.current
       const index = currentTerminals.findIndex((t) => t.id === id)
       if (index === -1) return
@@ -721,24 +758,49 @@ export function TerminalBottomPanelContent({
         killMutation.mutate({ paneId: terminal.paneId })
       })
       const remainingTerminals = currentTerminals.slice(0, index + 1)
-      setAllTerminals((prev) => ({ ...prev, [currentChatId]: remainingTerminals }))
+      setAllTerminals((prev) => ({ ...prev, [currentScopeKey]: remainingTerminals }))
       const currentActiveId = activeTerminalIdRef.current
       if (currentActiveId && !remainingTerminals.find((t) => t.id === currentActiveId)) {
         setAllActiveIds((prev) => ({
           ...prev,
-          [currentChatId]: remainingTerminals[remainingTerminals.length - 1]?.id || null,
+          [currentScopeKey]: remainingTerminals[remainingTerminals.length - 1]?.id || null,
         }))
       }
     },
     [setAllTerminals, setAllActiveIds, killMutation],
   )
 
-  // Auto-create first terminal when no terminals exist
+  // Auto-create first terminal or discover shared terminals
   useEffect(() => {
-    if (terminals.length === 0) {
+    if (terminals.length > 0) return
+
+    if (isSharedTerminalScope(scopeKey)) {
+      trpcUtils.terminal.listSessionsByScopeKey
+        .fetch({ scopeKey })
+        .then((sessions) => {
+          if (sessions.length > 0) {
+            const instances = sessions.map((s, i) => ({
+              id: s.paneId.split(":term:")[1] || generateTerminalId(),
+              paneId: s.paneId,
+              name: `Terminal ${i + 1}`,
+              createdAt: s.lastActive,
+            }))
+            setAllTerminals((prev) => ({ ...prev, [scopeKey]: instances }))
+            setAllActiveIds((prev) => ({
+              ...prev,
+              [scopeKey]: instances[0]?.id || null,
+            }))
+          } else {
+            createTerminal()
+          }
+        })
+        .catch(() => {
+          createTerminal()
+        })
+    } else {
       createTerminal()
     }
-  }, [terminals.length, createTerminal])
+  }, [terminals.length, scopeKey, createTerminal, trpcUtils, setAllTerminals, setAllActiveIds])
 
   return (
     <div className="flex flex-col h-full min-w-0 overflow-hidden">
@@ -804,6 +866,7 @@ export function TerminalBottomPanelContent({
               paneId={activeTerminal.paneId}
               cwd={cwd}
               workspaceId={workspaceId}
+              scopeKey={scopeKey}
               tabId={tabId}
               initialCommands={initialCommands}
               initialCwd={cwd}

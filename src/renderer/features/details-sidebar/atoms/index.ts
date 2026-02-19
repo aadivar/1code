@@ -135,6 +135,15 @@ export const detailsSidebarOpenAtom = atomWithWindowStorage<boolean>(
   { getOnInit: true },
 )
 
+// Details sidebar active tab (per-window, persisted)
+export type DetailsSidebarTab = "details" | "files"
+
+export const detailsSidebarTabAtom = atomWithWindowStorage<DetailsSidebarTab>(
+  "overview:sidebarTab",
+  "details",
+  { getOnInit: true },
+)
+
 // Section types for the overview sidebar
 export type OverviewSection = "info" | "plan" | "terminal" | "diff"
 
@@ -194,6 +203,31 @@ export const planContentCacheAtomFamily = atomFamily((chatId: string) =>
       set(planContentCacheStorageAtom, {
         ...current,
         [chatId]: cache,
+      })
+    },
+  ),
+)
+
+// ============================================================================
+// File Tree Expanded Paths (per worktree, persisted across reloads)
+// ============================================================================
+
+const fileTreeExpandedStorageAtom = atomWithStorage<
+  Record<string, string[]>
+>("overview:fileTreeExpanded", {}, undefined, { getOnInit: true })
+
+/** null sentinel: first mount for this worktree (no user action yet → auto-expand roots) */
+export const fileTreeExpandedAtomFamily = atomFamily((worktreePath: string) =>
+  atom(
+    (get): string[] | null => {
+      const stored = get(fileTreeExpandedStorageAtom)[worktreePath]
+      return stored ?? null // null = never initialised
+    },
+    (get, set, paths: string[]) => {
+      const current = get(fileTreeExpandedStorageAtom)
+      set(fileTreeExpandedStorageAtom, {
+        ...current,
+        [worktreePath]: paths,
       })
     },
   ),

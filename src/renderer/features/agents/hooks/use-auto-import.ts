@@ -47,12 +47,13 @@ export function useAutoImport() {
         meta: remoteChat.meta,
       })
 
-      if (!remoteChat.meta?.repository) {
+      const repoString = remoteChat.meta?.repository || remoteChat.meta?.github_repo
+      if (!repoString) {
         console.log(`[OPEN-LOCALLY-MATCH] No repository in meta, returning []`)
         return []
       }
 
-      const [owner, repo] = remoteChat.meta.repository.split("/")
+      const [owner, repo] = repoString.split("/")
       console.log(`[OPEN-LOCALLY-MATCH] Looking for: owner="${owner}", repo="${repo}"`)
 
       console.log(`[OPEN-LOCALLY-MATCH] All projects (${projects.length}):`)

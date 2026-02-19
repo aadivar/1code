@@ -366,8 +366,13 @@ export function KanbanView() {
   // Archive handler with confirmation for active processes
   const handleArchive = useCallback(async (chatId: string) => {
     // Check for active processes and worktree
+    const chat = chats?.find((c) => c.id === chatId)
+    const isLocalMode = !chat?.branch
     const [sessionCount, worktreeStatus] = await Promise.all([
-      utils.terminal.getActiveSessionCount.fetch({ workspaceId: chatId }),
+      // Local mode: terminals are shared and won't be killed on archive, so skip count
+      isLocalMode
+        ? Promise.resolve(0)
+        : utils.terminal.getActiveSessionCount.fetch({ workspaceId: chatId }),
       utils.chats.getWorktreeStatus.fetch({ chatId }),
     ])
 
@@ -382,7 +387,7 @@ export function KanbanView() {
     } else {
       await archiveChatMutation.mutateAsync({ id: chatId })
     }
-  }, [utils, archiveChatMutation])
+  }, [utils, archiveChatMutation, chats])
 
   const handleConfirmArchive = useCallback(async () => {
     if (!archivingChatId) return

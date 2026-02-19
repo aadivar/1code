@@ -133,9 +133,10 @@ export function OpenLocallyDialog({
 
   // Handler: Locate existing project
   const handleLocateProject = useCallback(async () => {
-    if (!remoteChat?.meta?.repository) return
+    const repoString = remoteChat?.meta?.repository || remoteChat?.meta?.github_repo
+    if (!repoString) return
 
-    const [owner, repo] = remoteChat.meta.repository.split("/")
+    const [owner, repo] = repoString.split("/")
     if (!owner || !repo) return
 
     const result = await locateMutation.mutateAsync({
@@ -160,9 +161,10 @@ export function OpenLocallyDialog({
 
   // Handler: Clone from sandbox
   const handleCloneFromSandbox = useCallback(async () => {
-    if (!remoteChat?.meta?.repository || !remoteChat.sandbox_id) return
+    const repoString = remoteChat?.meta?.repository || remoteChat?.meta?.github_repo
+    if (!repoString || !remoteChat?.sandbox_id) return
 
-    const [, repo] = remoteChat.meta.repository.split("/")
+    const [, repo] = repoString.split("/")
     if (!repo) return
 
     // Pick destination
@@ -199,7 +201,7 @@ export function OpenLocallyDialog({
   if (!portalTarget) return null
 
   const mode = matchingProjects.length === 0 ? "no-projects" : "multiple-projects"
-  const repository = remoteChat?.meta?.repository
+  const repository = remoteChat?.meta?.repository || remoteChat?.meta?.github_repo
 
   return createPortal(
     <AnimatePresence mode="wait" initial={false}>

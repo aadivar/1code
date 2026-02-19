@@ -1,7 +1,7 @@
 "use client"
 
 import { useAtom, useAtomValue, useSetAtom } from "jotai"
-import { ChevronDown, Loader2, RefreshCw, Zap } from "lucide-react"
+import { ChevronDown, RefreshCw } from "lucide-react"
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 
@@ -10,18 +10,16 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../../../components/ui/dropdown-menu"
 import {
   AgentIcon,
   AttachIcon,
   CheckIcon,
-  ClaudeCodeIcon,
+  IconSpinner,
   OriginalMCPIcon,
   PlanIcon,
   SettingsIcon,
-  ThinkingIcon,
 } from "../../../components/ui/icons"
 import { Kbd } from "../../../components/ui/kbd"
 import {
@@ -29,7 +27,6 @@ import {
   PromptInputActions,
   PromptInputContextItems,
 } from "../../../components/ui/prompt-input"
-import { Switch } from "../../../components/ui/switch"
 import {
   Tooltip,
   TooltipContent,
@@ -43,25 +40,43 @@ import {
 import {
   agentsSettingsDialogActiveTabAtom,
   agentsSettingsDialogOpenAtom,
-  autoOfflineModeAtom,
+  anthropicOnboardingCompletedAtom,
+  apiKeyOnboardingCompletedAtom,
+  codexApiKeyAtom,
+  codexOnboardingCompletedAtom,
   customClaudeConfigAtom,
   extendedThinkingEnabledAtom,
+  hiddenModelsAtom,
+  normalizeCodexApiKey,
   normalizeCustomClaudeConfig,
   selectedOllamaModelAtom,
   showOfflineModeFeaturesAtom,
 } from "../../../lib/atoms"
 import { trpc } from "../../../lib/trpc"
 import { cn } from "../../../lib/utils"
-import { lastSelectedModelIdAtom, subChatModeAtomFamily, getNextMode, type AgentMode, type SubChatFileChange } from "../atoms"
+import {
+  lastSelectedCodexModelIdAtom,
+  lastSelectedCodexThinkingAtom,
+  lastSelectedModelIdAtom,
+  subChatModeAtomFamily,
+  getNextMode,
+  type AgentMode,
+  type SubChatFileChange,
+} from "../atoms"
 import { useAgentSubChatStore } from "../stores/sub-chat-store"
 import { AgentsSlashCommand, type SlashCommandOption } from "../commands"
+import { AgentModelSelector } from "../components/agent-model-selector"
 import { AgentSendButton } from "../components/agent-send-button"
 import type { UploadedFile, UploadedImage } from "../hooks/use-agents-file-upload"
 import {
   clearSubChatDraft,
   saveSubChatDraftWithAttachments,
 } from "../lib/drafts"
-import { CLAUDE_MODELS } from "../lib/models"
+import {
+  CLAUDE_MODELS,
+  CODEX_MODELS,
+  type CodexThinkingLevel,
+} from "../lib/models"
 import type { DiffTextContext, SelectedTextContext } from "../lib/queue-utils"
 import {
   AgentsFileMention,
@@ -86,6 +101,7 @@ import {
 } from "../../../lib/hooks/use-voice-recording"
 import { getResolvedHotkey } from "../../../lib/hotkeys"
 import { customHotkeysAtom } from "../../../lib/atoms"
+import { toast } from "sonner"
 
 // Hook to get available models (including offline models if Ollama is available and debug enabled)
 function useAvailableModels() {
@@ -164,6 +180,7 @@ export interface ChatInputAreaProps {
   // Context
   subChatId: string
   parentChatId: string
+  provider?: "claude-code" | "codex"
   teamId?: string
   repository?: string
   sandboxId?: string
@@ -179,6 +196,12 @@ export interface ChatInputAreaProps {
   onInputContentChange?: (hasContent: boolean) => void
   // Callback to send message with question answer (Enter sends immediately, not to queue)
   onSubmitWithQuestionAnswer?: () => void
+  // Callback to switch provider for brand new (empty) sub-chats
+  onProviderChange?: (provider: "claude-code" | "codex") => void
+  // Callback to continue chat with a different provider (creates new sub-chat with history)
+  onContinueWithProvider?: (provider: "claude-code" | "codex") => void
+  // Whether this sub-chat tab is the active/visible one (prevents window-level hotkeys in background tabs)
+  isActive?: boolean
 }
 
 /**
@@ -193,13 +216,15 @@ function arePropsEqual(prevProps: ChatInputAreaProps, nextProps: ChatInputAreaPr
     prevProps.isUploading !== nextProps.isUploading ||
     prevProps.subChatId !== nextProps.subChatId ||
     prevProps.parentChatId !== nextProps.parentChatId ||
+    prevProps.provider !== nextProps.provider ||
     prevProps.teamId !== nextProps.teamId ||
     prevProps.repository !== nextProps.repository ||
     prevProps.sandboxId !== nextProps.sandboxId ||
     prevProps.projectPath !== nextProps.projectPath ||
     prevProps.isMobile !== nextProps.isMobile ||
     prevProps.queueLength !== nextProps.queueLength ||
-    prevProps.firstQueueItemId !== nextProps.firstQueueItemId
+    prevProps.firstQueueItemId !== nextProps.firstQueueItemId ||
+    prevProps.isActive !== nextProps.isActive
   ) {
     return false
   }
@@ -229,6 +254,8 @@ function arePropsEqual(prevProps: ChatInputAreaProps, nextProps: ChatInputAreaPr
     prevProps.onCacheFileContent !== nextProps.onCacheFileContent ||
     prevProps.onInputContentChange !== nextProps.onInputContentChange ||
     prevProps.onSubmitWithQuestionAnswer !== nextProps.onSubmitWithQuestionAnswer ||
+    prevProps.onProviderChange !== nextProps.onProviderChange ||
+    prevProps.onContinueWithProvider !== nextProps.onContinueWithProvider ||
     prevProps.onSendFromQueue !== nextProps.onSendFromQueue
   ) {
     return false
@@ -365,6 +392,7 @@ export const ChatInputArea = memo(function ChatInputArea({
   messageTokenData,
   subChatId,
   parentChatId,
+  provider = "claude-code",
   teamId,
   repository,
   sandboxId,
@@ -376,6 +404,9 @@ export const ChatInputArea = memo(function ChatInputArea({
   firstQueueItemId,
   onInputContentChange,
   onSubmitWithQuestionAnswer,
+  onProviderChange,
+  onContinueWithProvider,
+  isActive = true,
 }: ChatInputAreaProps) {
   // Local state - changes here don't re-render parent
   const [hasContent, setHasContent] = useState(false)
@@ -417,10 +448,14 @@ export const ChatInputArea = memo(function ChatInputArea({
   // Model dropdown state
   const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false)
   const [lastSelectedModelId, setLastSelectedModelId] = useAtom(lastSelectedModelIdAtom)
+  const [lastSelectedCodexModelId, setLastSelectedCodexModelId] = useAtom(
+    lastSelectedCodexModelIdAtom,
+  )
+  const [lastSelectedCodexThinking, setLastSelectedCodexThinking] = useAtom(
+    lastSelectedCodexThinkingAtom,
+  )
   const [selectedOllamaModel, setSelectedOllamaModel] = useAtom(selectedOllamaModelAtom)
   const availableModels = useAvailableModels()
-  const autoOfflineMode = useAtomValue(autoOfflineModeAtom)
-  const showOfflineFeatures = useAtomValue(showOfflineModeFeaturesAtom)
   const [selectedModel, setSelectedModel] = useState(
     () => availableModels.models.find((m) => m.id === lastSelectedModelId) || availableModels.models[0],
   )
@@ -433,10 +468,75 @@ export const ChatInputArea = memo(function ChatInputArea({
     }
   }, [lastSelectedModelId])
 
+  const storedCodexApiKey = useAtomValue(codexApiKeyAtom)
+  const hasAppCodexApiKey = Boolean(normalizeCodexApiKey(storedCodexApiKey))
+  const hiddenModels = useAtomValue(hiddenModelsAtom)
+
+  // Connection status for providers
+  const anthropicOnboardingCompleted = useAtomValue(anthropicOnboardingCompletedAtom)
+  const apiKeyOnboardingCompleted = useAtomValue(apiKeyOnboardingCompletedAtom)
+  const codexOnboardingCompleted = useAtomValue(codexOnboardingCompletedAtom)
+  const { data: claudeCodeIntegration } =
+    trpc.claudeCode.getIntegration.useQuery()
+  const codexUiModels = useMemo(
+    () => {
+      let models = hasAppCodexApiKey
+        ? CODEX_MODELS.filter((model) => model.id !== "gpt-5.3-codex")
+        : CODEX_MODELS
+      return models.filter((model) => !hiddenModels.includes(model.id))
+    },
+    [hasAppCodexApiKey, hiddenModels],
+  )
+  const selectedCodexModel = useMemo(
+    () =>
+      codexUiModels.find((model) => model.id === lastSelectedCodexModelId) ||
+      codexUiModels[0] ||
+      CODEX_MODELS[0]!,
+    [codexUiModels, lastSelectedCodexModelId],
+  )
+
+  const selectedCodexThinking = useMemo<CodexThinkingLevel>(() => {
+    if (
+      selectedCodexModel.thinkings.includes(
+        lastSelectedCodexThinking as CodexThinkingLevel,
+      )
+    ) {
+      return lastSelectedCodexThinking as CodexThinkingLevel
+    }
+
+    if (selectedCodexModel.thinkings.includes("high")) {
+      return "high"
+    }
+
+    return selectedCodexModel.thinkings[0]!
+  }, [selectedCodexModel, lastSelectedCodexThinking])
+
+  useEffect(() => {
+    if (
+      selectedCodexModel.thinkings.includes(
+        lastSelectedCodexThinking as CodexThinkingLevel,
+      )
+    ) {
+      return
+    }
+
+    setLastSelectedCodexThinking(selectedCodexThinking)
+  }, [
+    selectedCodexModel,
+    lastSelectedCodexThinking,
+    selectedCodexThinking,
+    setLastSelectedCodexThinking,
+  ])
+
   const customClaudeConfig = useAtomValue(customClaudeConfigAtom)
   const normalizedCustomClaudeConfig =
     normalizeCustomClaudeConfig(customClaudeConfig)
   const hasCustomClaudeConfig = Boolean(normalizedCustomClaudeConfig)
+  const isClaudeConnected =
+    Boolean(claudeCodeIntegration?.isConnected) ||
+    anthropicOnboardingCompleted ||
+    apiKeyOnboardingCompleted ||
+    hasCustomClaudeConfig
 
   // Determine current Ollama model (selected or recommended)
   const currentOllamaModel = selectedOllamaModel || availableModels.recommendedModel || availableModels.ollamaModels[0]
@@ -450,6 +550,36 @@ export const ChatInputArea = memo(function ChatInputArea({
 
   // Extended thinking (reasoning) toggle
   const [thinkingEnabled, setThinkingEnabled] = useAtom(extendedThinkingEnabledAtom)
+
+  const selectedModelLabel = useMemo(() => {
+    if (provider === "codex") {
+      return selectedCodexModel.name
+    }
+
+    if (availableModels.isOffline && availableModels.hasOllama) {
+      return currentOllamaModel || "Ollama"
+    }
+
+    if (hasCustomClaudeConfig) {
+      return "Custom Model"
+    }
+
+    if (!selectedModel) {
+      return "Select model"
+    }
+
+    return `${selectedModel.name} ${selectedModel.version}`
+  }, [
+    provider,
+    selectedCodexModel.name,
+    availableModels.isOffline,
+    availableModels.hasOllama,
+    currentOllamaModel,
+    hasCustomClaudeConfig,
+    selectedModel,
+  ])
+  const canSwitchProvider =
+    messageTokenData.messageCount === 0 && !isStreaming && !sandboxId
 
   // MCP status - from getAllMcpConfig query (provides global/local grouping)
   const setSettingsOpen = useSetAtom(agentsSettingsDialogOpenAtom)
@@ -526,9 +656,6 @@ export const ChatInputArea = memo(function ChatInputArea({
     updateMode(getNextMode(subChatMode))
   }, [subChatMode, updateMode])
 
-  // Track narrow width for compact layout (hide labels when < 310px)
-  const [isNarrow, setIsNarrow] = useState(false)
-
   // Voice input state
   const {
     isRecording: isVoiceRecording,
@@ -566,11 +693,15 @@ export const ChatInputArea = memo(function ChatInputArea({
 
   // Keyboard shortcut: Cmd+/ to open model selector
   useEffect(() => {
+    if (!isActive) return
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.metaKey && e.key === "/") {
         e.preventDefault()
         e.stopPropagation()
-        if (!hasCustomClaudeConfig) {
+        const shouldBlockForCustomClaude =
+          provider === "claude-code" && hasCustomClaudeConfig
+        if (!shouldBlockForCustomClaude) {
           setIsModelDropdownOpen(true)
         }
       }
@@ -578,7 +709,7 @@ export const ChatInputArea = memo(function ChatInputArea({
 
     window.addEventListener("keydown", handleKeyDown, true)
     return () => window.removeEventListener("keydown", handleKeyDown, true)
-  }, [hasCustomClaudeConfig])
+  }, [hasCustomClaudeConfig, provider, isActive])
 
   // Voice input handlers
   const handleVoiceMouseDown = useCallback(async () => {
@@ -587,11 +718,15 @@ export const ChatInputArea = memo(function ChatInputArea({
       await startVoiceRecording()
     } catch (err) {
       console.error("[VoiceInput] Failed to start recording:", err)
+      toast.error(err instanceof Error ? err.message : "Failed to start recording")
     }
   }, [isStreaming, isTranscribing, isVoiceRecording, startVoiceRecording])
 
   const handleVoiceMouseUp = useCallback(async () => {
     if (!isVoiceRecording) return
+
+    // Set transcribing immediately to avoid visual flash between recording and transcribing states
+    setIsTranscribing(true)
 
     try {
       const blob = await stopVoiceRecording()
@@ -599,12 +734,11 @@ export const ChatInputArea = memo(function ChatInputArea({
       // Don't transcribe very short recordings (likely accidental clicks)
       if (blob.size < 1000) {
         console.log("[VoiceInput] Recording too short, ignoring")
+        if (voiceMountedRef.current) setIsTranscribing(false)
         return
       }
 
       if (!voiceMountedRef.current) return
-
-      setIsTranscribing(true)
 
       const base64 = await blobToBase64(blob)
       const format = getAudioFormat(blob.type)
@@ -617,22 +751,18 @@ export const ChatInputArea = memo(function ChatInputArea({
       if (!voiceMountedRef.current) return
 
       if (result.text && result.text.trim()) {
-        // Insert transcribed text into editor
-        // Clean both current value and transcribed text
-        const currentRaw = editorRef.current?.getValue() || ""
-        const current = currentRaw.replace(/[\r\n\t]+/g, " ").replace(/ +/g, " ").trim()
-        const transcribed = result.text
-          .replace(/[\r\n\t]+/g, " ")
-          .replace(/ +/g, " ")
-          .trim()
-        // Add space separator only if current text exists and doesn't end with whitespace
+        const current = (editorRef.current?.getValue() || "").trim()
+        const transcribed = result.text.trim()
         const needsSpace = current.length > 0 && !/\s$/.test(current)
         const newValue = current + (needsSpace ? " " : "") + transcribed
         editorRef.current?.setValue(newValue)
         editorRef.current?.focus()
+      } else {
+        toast.info("No speech detected")
       }
     } catch (err) {
       console.error("[VoiceInput] Transcription failed:", err)
+      toast.error("Voice transcription failed")
     } finally {
       if (voiceMountedRef.current) {
         setIsTranscribing(false)
@@ -647,9 +777,30 @@ export const ChatInputArea = memo(function ChatInputArea({
     }
   }, [isVoiceRecording, cancelVoiceRecording])
 
+  // Auto-cancel recording when window loses focus (prevents stuck recording if keyup never fires)
+  useEffect(() => {
+    if (!isVoiceRecording) return
+
+    const handleFocusLoss = () => {
+      cancelVoiceRecording()
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) cancelVoiceRecording()
+    }
+
+    window.addEventListener("blur", handleFocusLoss)
+    document.addEventListener("visibilitychange", handleVisibilityChange)
+    return () => {
+      window.removeEventListener("blur", handleFocusLoss)
+      document.removeEventListener("visibilitychange", handleVisibilityChange)
+    }
+  }, [isVoiceRecording, cancelVoiceRecording])
+
   // Keyboard shortcut: Voice input hotkey (push-to-talk: hold to record, release to transcribe)
   useEffect(() => {
     if (!voiceInputHotkey) return
+    if (!isActive) return
 
     // Parse hotkey once
     const parts = voiceInputHotkey.split("+").map(p => p.toLowerCase())
@@ -740,7 +891,7 @@ export const ChatInputArea = memo(function ChatInputArea({
       window.removeEventListener("keydown", handleKeyDown, true)
       window.removeEventListener("keyup", handleKeyUp, true)
     }
-  }, [voiceInputHotkey, isVoiceRecording, isTranscribing, isStreaming, handleVoiceMouseDown, handleVoiceMouseUp])
+  }, [voiceInputHotkey, isVoiceRecording, isTranscribing, isStreaming, handleVoiceMouseDown, handleVoiceMouseUp, isActive])
 
   // Save draft on blur (with attachments and text contexts)
   const handleEditorBlur = useCallback(async () => {
@@ -1044,7 +1195,6 @@ export const ChatInputArea = memo(function ChatInputArea({
           el.style.setProperty("--chat-input-width", `${width}px`)
           parent?.style.setProperty("--chat-input-height", `${height}px`)
           parent?.style.setProperty("--chat-input-width", `${width}px`)
-          setIsNarrow(width < 310)
         })
         observer.observe(el)
       }}
@@ -1132,6 +1282,7 @@ export const ChatInputArea = memo(function ChatInputArea({
                         filename={pt.filename}
                         size={pt.size}
                         preview={pt.preview}
+                        kind={pt.kind}
                         onRemove={onRemovePastedText ? () => onRemovePastedText(pt.id) : undefined}
                       />
                     ))}
@@ -1199,7 +1350,7 @@ export const ChatInputArea = memo(function ChatInputArea({
                         ) : (
                           <AgentIcon className="h-3.5 w-3.5 shrink-0" />
                         )}
-                        {!isNarrow && <span className="truncate">{subChatMode === "plan" ? "Plan" : "Agent"}</span>}
+                        <span className="truncate">{subChatMode === "plan" ? "Plan" : "Agent"}</span>
                         <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
                       </button>
                     </DropdownMenuTrigger>
@@ -1345,131 +1496,67 @@ export const ChatInputArea = memo(function ChatInputArea({
                       )}
                   </DropdownMenu>
 
-                  {/* Model selector - shows Ollama models when offline, Claude models when online */}
-                  {availableModels.isOffline && availableModels.hasOllama ? (
-                    // Offline mode: show Ollama model selector
-                    <DropdownMenu
+                  <div className="group/model-controls flex items-center gap-0.5">
+                    <AgentModelSelector
                       open={isModelDropdownOpen}
                       onOpenChange={setIsModelDropdownOpen}
-                    >
-                      <DropdownMenuTrigger asChild>
-                        <button
-                          className="flex items-center gap-1.5 px-2 py-1 text-sm text-muted-foreground hover:text-foreground transition-colors rounded-md hover:bg-muted/50 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70 border border-border"
-                        >
-                          <Zap className="h-4 w-4 shrink-0" />
-                          <span className="truncate">{currentOllamaModel || "Select model"}</span>
-                          <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
-                        </button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="start" className="w-[240px]">
-                        {availableModels.ollamaModels.map((model) => {
-                          const isSelected = model === currentOllamaModel
-                          const isRecommended = model === availableModels.recommendedModel
-                          return (
-                            <DropdownMenuItem
-                              key={model}
-                              onClick={() => {
-                                console.log(`[Ollama UI] Setting selected model: ${model}`)
-                                setSelectedOllamaModel(model)
-                              }}
-                              className="gap-2 justify-between"
-                            >
-                              <div className="flex items-center gap-1.5">
-                                <Zap className="h-4 w-4 text-muted-foreground shrink-0" />
-                                <span>
-                                  {model}
-                                  {isRecommended && (
-                                    <span className="text-muted-foreground ml-1">(recommended)</span>
-                                  )}
-                                </span>
-                              </div>
-                              {isSelected && (
-                                <CheckIcon className="h-3.5 w-3.5 shrink-0" />
-                              )}
-                            </DropdownMenuItem>
-                          )
-                        })}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  ) : (
-                    // Online mode: show Claude model selector
-                    <DropdownMenu
-                      open={hasCustomClaudeConfig ? false : isModelDropdownOpen}
-                      onOpenChange={(open) => {
-                        if (!hasCustomClaudeConfig) {
-                          setIsModelDropdownOpen(open)
-                        }
+                      selectedAgentId={provider}
+                      onSelectedAgentIdChange={(nextProvider) => {
+                        if (!canSwitchProvider) return
+                        if (nextProvider === provider) return
+                        onProviderChange?.(nextProvider)
                       }}
-                    >
-                      <DropdownMenuTrigger asChild>
-                        <button
-                          disabled={hasCustomClaudeConfig}
-                          className={cn(
-                            "flex items-center gap-1.5 px-2 py-1 text-sm text-muted-foreground transition-colors rounded-md outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70",
-                            hasCustomClaudeConfig
-                              ? "opacity-70 cursor-not-allowed"
-                              : "hover:text-foreground hover:bg-muted/50",
-                          )}
-                        >
-                          {!isNarrow && <ClaudeCodeIcon className="h-3.5 w-3.5 shrink-0" />}
-                          <span className="truncate">
-                            {hasCustomClaudeConfig ? (
-                              "Custom Model"
-                            ) : isNarrow ? (
-                              selectedModel?.name
-                            ) : (
-                              <>
-                                {selectedModel?.name}{" "}
-                                <span className="text-muted-foreground">{selectedModel?.version}</span>
-                              </>
-                            )}
-                          </span>
-                          <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
-                        </button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="start" className="w-[200px]">
-                        {availableModels.models.map((model) => {
-                          const isSelected = selectedModel?.id === model.id
-                          return (
-                            <DropdownMenuItem
-                              key={model.id}
-                              onClick={() => {
-                                setSelectedModel(model)
-                                setLastSelectedModelId(model.id)
-                              }}
-                              className="gap-2 justify-between"
-                            >
-                              <div className="flex items-center gap-1.5">
-                                <ClaudeCodeIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                                <span>
-                                  {model.name}{" "}
-                                  <span className="text-muted-foreground">{model.version}</span>
-                                </span>
-                              </div>
-                              {isSelected && (
-                                <CheckIcon className="h-3.5 w-3.5 shrink-0" />
-                              )}
-                            </DropdownMenuItem>
+                      allowProviderSwitch={canSwitchProvider}
+                      onContinueWithProvider={!canSwitchProvider ? onContinueWithProvider : undefined}
+                      selectedModelLabel={selectedModelLabel}
+                      onOpenModelsSettings={() => {
+                        setSettingsTab("models")
+                        setSettingsOpen(true)
+                      }}
+                      claude={{
+                        models: availableModels.models.filter((m) => !hiddenModels.includes(m.id)),
+                        selectedModelId: selectedModel?.id,
+                        onSelectModel: (modelId) => {
+                          const model =
+                            availableModels.models.find((item) => item.id === modelId) ||
+                            availableModels.models[0]
+                          if (!model) return
+                          setSelectedModel(model)
+                          setLastSelectedModelId(model.id)
+                        },
+                        hasCustomModelConfig: hasCustomClaudeConfig,
+                        isOffline: availableModels.isOffline && availableModels.hasOllama,
+                        ollamaModels: availableModels.ollamaModels,
+                        selectedOllamaModel: currentOllamaModel,
+                        recommendedOllamaModel: availableModels.recommendedModel,
+                        onSelectOllamaModel: setSelectedOllamaModel,
+                        isConnected: isClaudeConnected,
+                        thinkingEnabled,
+                        onThinkingChange: setThinkingEnabled,
+                      }}
+                      codex={{
+                        models: codexUiModels,
+                        selectedModelId: selectedCodexModel.id,
+                        onSelectModel: (modelId) => {
+                          const model = codexUiModels.find((item) => item.id === modelId)
+                          if (!model) return
+                          const nextThinking = model.thinkings.includes(
+                            lastSelectedCodexThinking as CodexThinkingLevel,
                           )
-                        })}
-                        <DropdownMenuSeparator />
-                        <div
-                          className="flex items-center justify-between px-1.5 py-1.5 mx-1"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <div className="flex items-center gap-1.5">
-                            <ThinkingIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                            <span className="text-sm">Thinking</span>
-                          </div>
-                          <Switch
-                            checked={thinkingEnabled}
-                            onCheckedChange={setThinkingEnabled}
-                            className="scale-75"
-                          />
-                        </div>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  )}
+                            ? (lastSelectedCodexThinking as CodexThinkingLevel)
+                            : (model.thinkings.includes("high")
+                              ? "high"
+                              : model.thinkings[0]!)
+
+                          setLastSelectedCodexModelId(model.id)
+                          setLastSelectedCodexThinking(nextThinking)
+                        },
+                        selectedThinking: selectedCodexThinking,
+                        onSelectThinking: setLastSelectedCodexThinking,
+                        isConnected: codexOnboardingCompleted,
+                      }}
+                    />
+                  </div>
 
                 </div>
 
@@ -1487,9 +1574,13 @@ export const ChatInputArea = memo(function ChatInputArea({
                     }}
                   />
 
-                  {/* Voice wave indicator - shown during recording */}
+                  {/* Voice wave indicator / transcribing state / normal toolbar */}
                   {isVoiceRecording ? (
                     <VoiceWaveIndicator isRecording={isVoiceRecording} audioLevel={voiceAudioLevel} />
+                  ) : isTranscribing ? (
+                    <div className="flex items-center px-2 h-5">
+                      <IconSpinner className="size-3.5 text-muted-foreground" />
+                    </div>
                   ) : (
                     <>
                       {/* Context window indicator - click to compact */}

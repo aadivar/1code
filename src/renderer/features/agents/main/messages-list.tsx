@@ -5,11 +5,11 @@ import { createContext, memo, useCallback, useContext, useLayoutEffect, useMemo,
 import { showMessageJsonAtom } from "../atoms"
 import { extractTextMentions, TextMentionBlocks } from "../mentions/render-file-mentions"
 import {
+  chatStatusAtom,
   isLastMessageAtomFamily,
-  isLastMessagePerChatAtomFamily,
+  isStreamingAtom,
   messageAtomFamily,
 } from "../stores/message-store"
-import { useStreamingStatusStore } from "../stores/streaming-status-store"
 import { MessageJsonDisplay } from "../ui/message-json-display"
 import { AssistantMessageItem } from "./assistant-message-item"
 
@@ -407,11 +407,9 @@ const StreamingMessageItem = memo(function StreamingMessageItem({
   // Subscribe to this specific message via Jotai - only re-renders when THIS message changes
   const message = useAtomValue(messageAtomFamily(messageId))
 
-  // Subscribe to per-subchat streaming status (fixes split view concurrent streaming)
-  const status = useStreamingStatusStore(
-    useCallback((s) => s.statuses[subChatId] ?? "ready", [subChatId])
-  )
-  const isStreaming = status === "streaming" || status === "submitted"
+  // Subscribe to streaming status
+  const isStreaming = useAtomValue(isStreamingAtom)
+  const status = useAtomValue(chatStatusAtom)
 
   if (!message) return null
 
@@ -486,9 +484,7 @@ export const MessageItemWrapper = memo(function MessageItemWrapper({
 
   // Only subscribe to isLast - NOT to message content!
   // StreamingMessageItem and NonStreamingMessageItem will subscribe to message themselves
-  // Use per-subchat atom to avoid cross-pane interference in split view
-  const perChatKey = `${subChatId}:${messageId}`
-  const isLast = useAtomValue(isLastMessagePerChatAtomFamily(perChatKey))
+  const isLast = useAtomValue(isLastMessageAtomFamily(messageId))
 
   // Only the last message subscribes to streaming status
   if (isLast) {

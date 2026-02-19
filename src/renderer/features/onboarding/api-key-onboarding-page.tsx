@@ -31,7 +31,7 @@ export function ApiKeyOnboardingPage() {
   const isCustomModel = billingMethod === "custom-model"
 
   // Default values for API key mode (not custom model)
-  const defaultModel = "claude-sonnet-4-20250514"
+  const defaultModel = "claude-sonnet-4-6"
   const defaultBaseUrl = "https://api.anthropic.com"
 
   const [apiKey, setApiKey] = useState(storedConfig.token)
@@ -232,7 +232,7 @@ export function ApiKeyOnboardingPage() {
             <Input
               value={model}
               onChange={(e) => setModel(e.target.value)}
-              placeholder="claude-sonnet-4-20250514"
+              placeholder="claude-sonnet-4-6"
               className="w-full"
             />
             <p className="text-xs text-muted-foreground">

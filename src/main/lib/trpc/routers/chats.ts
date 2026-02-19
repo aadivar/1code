@@ -282,6 +282,7 @@ export const chatsRouter = router({
       z.object({
         projectId: z.string(),
         name: z.string().optional(),
+        model: z.string().optional(),
         initialMessage: z.string().optional(),
         initialMessageParts: z
           .array(
@@ -328,7 +329,10 @@ export const chatsRouter = router({
       // Create chat (fast path)
       const chat = db
         .insert(chats)
-        .values({ name: input.name, projectId: input.projectId })
+        .values({
+          name: input.name,
+          projectId: input.projectId,
+        })
         .returning()
         .get()
       console.log("[chats.create] created chat:", chat)
@@ -336,6 +340,7 @@ export const chatsRouter = router({
       // Create initial sub-chat with user message (AI SDK format)
       // If initialMessageParts is provided, use it; otherwise fallback to text-only message
       let initialMessages = "[]"
+      const initialMetadata = input.model ? { model: input.model } : undefined
 
       if (input.initialMessageParts && input.initialMessageParts.length > 0) {
         initialMessages = JSON.stringify([
@@ -343,6 +348,7 @@ export const chatsRouter = router({
             id: `msg-${Date.now()}`,
             role: "user",
             parts: input.initialMessageParts,
+            ...(initialMetadata ? { metadata: initialMetadata } : {}),
           },
         ])
       } else if (input.initialMessage) {
@@ -351,6 +357,7 @@ export const chatsRouter = router({
             id: `msg-${Date.now()}`,
             role: "user",
             parts: [{ type: "text", text: input.initialMessage }],
+            ...(initialMetadata ? { metadata: initialMetadata } : {}),
           },
         ])
       }
@@ -507,16 +514,21 @@ export const chatsRouter = router({
       // Track workspace archived
       trackWorkspaceArchived(input.id)
 
-      // Kill terminal processes in background (don't await)
-      terminalManager.killByWorkspaceId(input.id).then((killResult) => {
-        if (killResult.killed > 0) {
-          console.log(
-            `[chats.archive] Killed ${killResult.killed} terminal session(s) for workspace ${input.id}`,
-          )
-        }
-      }).catch((error) => {
-        console.error(`[chats.archive] Error killing processes:`, error)
-      })
+      // Kill terminal processes only for worktree-mode workspaces.
+      // Local-mode terminals are shared across workspaces on the same project path,
+      // so they should not be killed when a single workspace is archived.
+      const isLocalMode = !chat?.branch
+      if (!isLocalMode) {
+        terminalManager.killByWorkspaceId(input.id).then((killResult) => {
+          if (killResult.killed > 0) {
+            console.log(
+              `[chats.archive] Killed ${killResult.killed} terminal session(s) for workspace ${input.id}`,
+            )
+          }
+        }).catch((error) => {
+          console.error(`[chats.archive] Error killing processes:`, error)
+        })
+      }
 
       // Optionally delete worktree in background (don't await)
       if (input.deleteWorktree && chat?.worktreePath && chat?.branch) {
@@ -581,6 +593,14 @@ export const chatsRouter = router({
       const db = getDatabase()
       if (input.chatIds.length === 0) return []
 
+      // Identify worktree-mode workspaces before archiving (for terminal cleanup)
+      const worktreeChats = db
+        .select({ id: chats.id, branch: chats.branch })
+        .from(chats)
+        .where(inArray(chats.id, input.chatIds))
+        .all()
+        .filter((c) => c.branch != null)
+
       // Archive immediately (optimistic)
       const result = db
         .update(chats)
@@ -589,19 +609,23 @@ export const chatsRouter = router({
         .returning()
         .all()
 
-      // Kill terminal processes for all workspaces in background (don't await)
-      Promise.all(
-        input.chatIds.map((id) => terminalManager.killByWorkspaceId(id)),
-      ).then((killResults) => {
-        const totalKilled = killResults.reduce((sum, r) => sum + r.killed, 0)
-        if (totalKilled > 0) {
-          console.log(
-            `[chats.archiveBatch] Killed ${totalKilled} terminal session(s) for ${input.chatIds.length} workspace(s)`,
-          )
-        }
-      }).catch((error) => {
-        console.error(`[chats.archiveBatch] Error killing processes:`, error)
-      })
+      // Kill terminal processes only for worktree-mode workspaces.
+      // Local-mode terminals are shared and should not be killed.
+
+      if (worktreeChats.length > 0) {
+        Promise.all(
+          worktreeChats.map((c) => terminalManager.killByWorkspaceId(c.id)),
+        ).then((killResults) => {
+          const totalKilled = killResults.reduce((sum, r) => sum + r.killed, 0)
+          if (totalKilled > 0) {
+            console.log(
+              `[chats.archiveBatch] Killed ${totalKilled} terminal session(s) for ${worktreeChats.length} worktree workspace(s)`,
+            )
+          }
+        }).catch((error) => {
+          console.error(`[chats.archiveBatch] Error killing processes:`, error)
+        })
+      }
 
       return result
     }),
@@ -630,6 +654,14 @@ export const chatsRouter = router({
             console.warn(`[Worktree] Cleanup failed: ${result.error}`)
           }
         }
+      }
+
+      // Kill terminal processes for worktree-mode workspaces.
+      // Local-mode terminals are shared and should not be killed on delete.
+      if (chat?.branch) {
+        terminalManager.killByWorkspaceId(input.id).catch((error) => {
+          console.error(`[chats.delete] Error killing processes:`, error)
+        })
       }
 
       // Track workspace deleted
@@ -701,6 +733,148 @@ export const chatsRouter = router({
         })
         .returning()
         .get()
+    }),
+
+  /**
+   * Fork a sub-chat from a specific message, preserving SDK session context.
+   * Creates a new sub-chat with messages up to the target message,
+   * copies the .jsonl session file, and marks it for forkSession resume.
+   */
+  forkSubChat: publicProcedure
+    .input(
+      z.object({
+        subChatId: z.string(),
+        messageId: z.string(),
+        name: z.string().optional(),
+      }),
+    )
+    .mutation(async ({ input }) => {
+      const db = getDatabase()
+
+      // 1. Get the source sub-chat
+      const sourceSubChat = db
+        .select()
+        .from(subChats)
+        .where(eq(subChats.id, input.subChatId))
+        .get()
+      if (!sourceSubChat) throw new Error("Source sub-chat not found")
+
+      // 2. Parse messages and find the cutoff point
+      const allMessages = JSON.parse(sourceSubChat.messages || "[]")
+      const cutoffIndex = allMessages.findIndex(
+        (m: any) => m.id === input.messageId,
+      )
+      if (cutoffIndex === -1) throw new Error("Message not found")
+
+      // 3. Slice messages up to and including the target
+      const messagesToFork = allMessages.slice(0, cutoffIndex + 1)
+
+      // 4. Find sdkMessageUuid of last assistant message (for resumeSessionAt)
+      const lastAssistant = [...messagesToFork]
+        .reverse()
+        .find((m: any) => m.role === "assistant")
+      const forkAtSdkUuid = lastAssistant?.metadata?.sdkMessageUuid || null
+
+      // 5. Generate new IDs for all messages + set shouldForkResume on last assistant
+      const forkedMessages = messagesToFork.map((msg: any, i: number) => ({
+        ...msg,
+        id: `fork-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 7)}`,
+        metadata: {
+          ...msg.metadata,
+          shouldResume: undefined,
+          ...(msg === lastAssistant &&
+            forkAtSdkUuid && {
+              shouldForkResume: true,
+            }),
+        },
+      }))
+
+      // 6. Generate fork name: [N] originalName
+      let forkName = input.name
+      if (!forkName) {
+        // Strip existing [N] prefix from source name to get base name
+        const sourceName = sourceSubChat.name || "Chat"
+        const baseName = sourceName.replace(/^\[\d+\]\s*/, "")
+
+        // Find highest [N] among all sibling sub-chats
+        const siblings = db
+          .select({ name: subChats.name })
+          .from(subChats)
+          .where(eq(subChats.chatId, sourceSubChat.chatId))
+          .all()
+
+        let maxN = 0
+        for (const s of siblings) {
+          const match = s.name?.match(/^\[(\d+)\]/)
+          if (match) {
+            maxN = Math.max(maxN, parseInt(match[1], 10))
+          }
+        }
+
+        forkName = `[${maxN + 1}] ${baseName}`
+      }
+
+      // 7. Insert new sub-chat with sessionId from original (needed for resume)
+      const newSubChat = db
+        .insert(subChats)
+        .values({
+          chatId: sourceSubChat.chatId,
+          name: forkName,
+          mode: sourceSubChat.mode,
+          messages: JSON.stringify(forkedMessages),
+          sessionId: sourceSubChat.sessionId,
+        })
+        .returning()
+        .get()
+
+      // 8. Copy .jsonl session files to the new isolated config dir
+      if (sourceSubChat.sessionId) {
+        try {
+          const { app } = await import("electron")
+          const userDataPath = app.getPath("userData")
+          const sourceDir = path.join(
+            userDataPath,
+            "claude-sessions",
+            input.subChatId,
+            "projects",
+          )
+          const targetDir = path.join(
+            userDataPath,
+            "claude-sessions",
+            newSubChat.id,
+            "projects",
+          )
+
+          const sourceDirExists = await fs
+            .stat(sourceDir)
+            .then(() => true)
+            .catch(() => false)
+
+          if (sourceDirExists) {
+            await fs.cp(sourceDir, targetDir, { recursive: true })
+          }
+        } catch (err) {
+          console.warn("[forkSubChat] Failed to copy session files:", err)
+          // Clear shouldForkResume since there's no .jsonl to fork from
+          for (const m of forkedMessages) {
+            if (m.metadata?.shouldForkResume) {
+              delete m.metadata.shouldForkResume
+            }
+          }
+          db.update(subChats)
+            .set({ messages: JSON.stringify(forkedMessages) })
+            .where(eq(subChats.id, newSubChat.id))
+            .run()
+        }
+      }
+
+      console.log("[forkSubChat] Created", { id: newSubChat.id, name: forkName, messages: forkedMessages.length })
+
+      return {
+        subChat: newSubChat,
+        messageCount: forkedMessages.length,
+        forkAtSdkUuid,
+      }
     }),
 
   /**

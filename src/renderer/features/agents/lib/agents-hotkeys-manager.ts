@@ -188,6 +188,19 @@ export function useAgentsHotkeys(
     return cleanup
   }, [enabled, handleHotkeyAction])
 
+  // Listen for Cmd+, via IPC from main process (menu accelerator)
+  React.useEffect(() => {
+    if (!enabled) return
+    if (!window.desktopApi?.onShortcutOpenSettings) return
+
+    const cleanup = window.desktopApi.onShortcutOpenSettings(() => {
+      console.log("[Hotkey] Cmd+, received via IPC, executing open-settings")
+      handleHotkeyAction("open-settings")
+    })
+
+    return cleanup
+  }, [enabled, handleHotkeyAction])
+
   // Get the resolved hotkey for a shortcut, respecting custom bindings
   const getHotkeyForAction = useCallback(
     (shortcutId: ShortcutActionId): string | null => {

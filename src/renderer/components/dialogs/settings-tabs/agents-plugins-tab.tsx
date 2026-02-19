@@ -69,23 +69,32 @@ function PluginDetail({
 }) {
   return (
     <div className="h-full flex flex-col overflow-hidden">
-      {/* Top bar with toggle */}
-      <div className="flex items-center justify-end px-6 py-3 shrink-0">
-        <div className="flex items-center gap-1.5">
-          <Switch
-            checked={!plugin.isDisabled}
-            onCheckedChange={onToggleEnabled}
-            disabled={isTogglingEnabled}
-          />
-          <span className="text-xs text-muted-foreground">Active</span>
-        </div>
-      </div>
-
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-2xl mx-auto p-6 space-y-5">
-          {/* Name & category */}
+          {/* Name & category with integrated toggle */}
           <div>
-            <h3 className="text-sm font-semibold text-foreground">{formatPluginName(plugin.name)}</h3>
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-foreground">{formatPluginName(plugin.name)}</h3>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5">
+                  <span className={cn(
+                    "inline-block h-1.5 w-1.5 rounded-full",
+                    plugin.isDisabled ? "bg-muted-foreground/40" : "bg-emerald-500"
+                  )} />
+                  <span className={cn(
+                    "text-sm font-medium",
+                    plugin.isDisabled ? "text-muted-foreground" : "text-emerald-500"
+                  )}>
+                    {plugin.isDisabled ? "Disabled" : "Active"}
+                  </span>
+                </div>
+                <Switch
+                  checked={!plugin.isDisabled}
+                  onCheckedChange={onToggleEnabled}
+                  disabled={isTogglingEnabled}
+                />
+              </div>
+            </div>
             {plugin.category && (
               <p className="text-xs text-muted-foreground mt-0.5 capitalize">{plugin.category}</p>
             )}

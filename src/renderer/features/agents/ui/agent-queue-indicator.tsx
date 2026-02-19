@@ -42,28 +42,44 @@ const QueueItemRow = memo(function QueueItemRow({
     [item.id, onSendNow]
   )
 
-  // Get display text - truncate message and show attachment count
-  const hasAttachments =
-    (item.images && item.images.length > 0) ||
-    (item.files && item.files.length > 0) ||
-    (item.textContexts && item.textContexts.length > 0) ||
-    (item.diffTextContexts && item.diffTextContexts.length > 0) ||
-    (item.pastedTexts && item.pastedTexts.length > 0)
-  const attachmentCount =
-    (item.images?.length || 0) +
-    (item.files?.length || 0) +
-    (item.textContexts?.length || 0) +
-    (item.diffTextContexts?.length || 0) +
-    (item.pastedTexts?.length || 0)
+  // Build attachment summary parts by type (matching sent message bubble style)
+  const attachmentParts: string[] = []
+  const imageCount = item.images?.length || 0
+  const fileCount = item.files?.length || 0
+  const quoteCount = item.textContexts?.length || 0
+  const diffCount = item.diffTextContexts?.length || 0
+  const pastedCount = item.pastedTexts?.length || 0
+
+  if (imageCount > 0) {
+    attachmentParts.push(imageCount === 1 ? "image" : `${imageCount} images`)
+  }
+  if (fileCount > 0) {
+    attachmentParts.push(fileCount === 1 ? "file" : `${fileCount} files`)
+  }
+  if (quoteCount > 0) {
+    attachmentParts.push(quoteCount === 1 ? "selected text" : `${quoteCount} text selections`)
+  }
+  if (pastedCount > 0) {
+    attachmentParts.push(pastedCount === 1 ? "pasted text" : `${pastedCount} pasted texts`)
+  }
+  if (diffCount > 0) {
+    attachmentParts.push(diffCount === 1 ? "code selection" : `${diffCount} code selections`)
+  }
 
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted/50 transition-colors cursor-default">
-      <span className="truncate flex-1 text-foreground">
+      {item.message ? (
+        <span className="truncate flex-1 text-foreground">
           <RenderFileMentions text={item.message} />
         </span>
-      {hasAttachments && (
+      ) : attachmentParts.length > 0 ? (
+        <span className="truncate flex-1 text-muted-foreground italic">
+          Using {attachmentParts.join(", ")}
+        </span>
+      ) : null}
+      {attachmentParts.length > 0 && (
         <span className="flex-shrink-0 text-muted-foreground text-[10px]">
-          +{attachmentCount} {attachmentCount === 1 ? "file" : "files"}
+          +{attachmentParts.join(", ")}
         </span>
       )}
       <div className="flex items-center gap-1">

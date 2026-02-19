@@ -10,6 +10,7 @@ class WindowManager {
   private mainWindowId: number | null = null  // Track the "main" window
   private windowIdMap: Map<number, string> = new Map()  // Map Electron window.id to stable ID
   private nextSecondaryId = 2  // Counter for secondary windows
+  private chatOwnership: Map<string, number> = new Map()  // chatId -> electronWindowId
 
   /**
    * Register a window with the manager and assign a stable ID
@@ -42,6 +43,8 @@ class WindowManager {
     window.on("closed", () => {
       // Cleanup git watcher subscriptions for this window to prevent memory leaks
       cleanupWindowSubscriptions(electronId)
+      // Release any chat ownership held by this window
+      this.releaseAllChats(electronId)
 
       this.windows.delete(electronId)
       this.windowIdMap.delete(electronId)
@@ -132,6 +135,79 @@ class WindowManager {
       }
     }
     return undefined
+  }
+
+  /**
+   * Attempt to claim a chat for a window.
+   * Returns { ok: true } if claimed, or { ok: false, ownerStableId } if already owned by another window.
+   */
+  claimChat(chatId: string, electronId: number): { ok: true } | { ok: false; ownerStableId: string } {
+    const existingOwner = this.chatOwnership.get(chatId)
+
+    // Already owned by this same window — idempotent success
+    if (existingOwner === electronId) {
+      return { ok: true }
+    }
+
+    // Owned by another window — check it still exists
+    if (existingOwner !== undefined) {
+      const ownerWindow = this.windows.get(existingOwner)
+      if (ownerWindow && !ownerWindow.isDestroyed()) {
+        const ownerStableId = this.windowIdMap.get(existingOwner) ?? "unknown"
+        return { ok: false, ownerStableId }
+      }
+      // Owner window is gone — stale entry, clean it up
+      this.chatOwnership.delete(chatId)
+    }
+
+    this.chatOwnership.set(chatId, electronId)
+    return { ok: true }
+  }
+
+  /**
+   * Release a chat owned by a specific window.
+   */
+  releaseChat(chatId: string, electronId: number): void {
+    if (this.chatOwnership.get(chatId) === electronId) {
+      this.chatOwnership.delete(chatId)
+    }
+  }
+
+  /**
+   * Release all chats owned by a window (called on window close).
+   */
+  releaseAllChats(electronId: number): void {
+    for (const [chatId, owner] of this.chatOwnership.entries()) {
+      if (owner === electronId) {
+        this.chatOwnership.delete(chatId)
+      }
+    }
+  }
+
+  /**
+   * Focus the window that owns a given chatId.
+   * Returns true if the window was found and focused.
+   */
+  focusChatOwner(chatId: string): boolean {
+    const ownerId = this.chatOwnership.get(chatId)
+    if (ownerId === undefined) return false
+
+    const window = this.windows.get(ownerId)
+    if (!window || window.isDestroyed()) {
+      this.chatOwnership.delete(chatId)
+      return false
+    }
+
+    if (window.isMinimized()) window.restore()
+    window.focus()
+    return true
+  }
+
+  /**
+   * Get the electron window ID that owns a chat, if any.
+   */
+  getChatOwner(chatId: string): number | undefined {
+    return this.chatOwnership.get(chatId)
   }
 }
 

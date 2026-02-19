@@ -18,6 +18,8 @@ import { chats, projects } from "./db/schema"
 const configMutex = new Mutex()
 
 export const CLAUDE_CONFIG_PATH = path.join(os.homedir(), ".claude.json")
+export const CLAUDE_DIR_CONFIG_PATH = path.join(os.homedir(), ".claude", ".claude.json")
+export const CLAUDE_DIR_MCP_PATH = path.join(os.homedir(), ".claude", "mcp.json")
 
 export interface McpServerConfig {
   command?: string
@@ -287,5 +289,200 @@ export function resolveProjectPathFromWorktree(
   } catch (error) {
     console.error("[worktree-utils] Failed to resolve project path:", error)
     return null
+  }
+}
+
+// ============================================================================
+// Additional MCP config sources (matching Claude Code CLI behavior)
+// Sources: .mcp.json (project), ~/.claude/.claude.json, ~/.claude/mcp.json
+// ============================================================================
+
+/**
+ * Expand environment variables in a string.
+ * Supports ${VAR} and ${VAR:-default} syntax, matching Claude Code CLI behavior.
+ */
+function expandEnvVars(value: string): string {
+  return value.replace(/\$\{([^}]+)\}/g, (_match, expr: string) => {
+    const defaultSep = expr.indexOf(":-")
+    if (defaultSep !== -1) {
+      const varName = expr.slice(0, defaultSep)
+      const defaultVal = expr.slice(defaultSep + 2)
+      return process.env[varName] || defaultVal
+    }
+    return process.env[expr] || ""
+  })
+}
+
+/**
+ * Expand env vars in MCP server config fields: command, args, env, url, headers
+ */
+function expandMcpServerEnvVars(
+  servers: Record<string, McpServerConfig>
+): Record<string, McpServerConfig> {
+  const result: Record<string, McpServerConfig> = {}
+  for (const [name, config] of Object.entries(servers)) {
+    const expanded: McpServerConfig = { ...config }
+    if (typeof expanded.command === "string") {
+      expanded.command = expandEnvVars(expanded.command)
+    }
+    if (Array.isArray(expanded.args)) {
+      expanded.args = expanded.args.map((a) =>
+        typeof a === "string" ? expandEnvVars(a) : a
+      )
+    }
+    if (typeof expanded.url === "string") {
+      expanded.url = expandEnvVars(expanded.url)
+    }
+    if (expanded.env && typeof expanded.env === "object") {
+      const envObj = expanded.env as Record<string, string>
+      const expandedEnv: Record<string, string> = {}
+      for (const [k, v] of Object.entries(envObj)) {
+        expandedEnv[k] = typeof v === "string" ? expandEnvVars(v) : v
+      }
+      expanded.env = expandedEnv
+    }
+    if (expanded.headers && typeof expanded.headers === "object") {
+      const headersObj = expanded.headers as Record<string, string>
+      const expandedHeaders: Record<string, string> = {}
+      for (const [k, v] of Object.entries(headersObj)) {
+        expandedHeaders[k] = typeof v === "string" ? expandEnvVars(v) : v
+      }
+      expanded.headers = expandedHeaders
+    }
+    result[name] = expanded
+  }
+  return result
+}
+
+/**
+ * Read .mcp.json from a project root directory.
+ * Supports both nested { "mcpServers": {...} } and flat { "server-name": {...} } formats.
+ * Expands environment variables in server configs.
+ * Returns empty record if file doesn't exist or is invalid.
+ */
+export async function readProjectMcpJson(
+  projectPath: string
+): Promise<Record<string, McpServerConfig>> {
+  try {
+    const mcpJsonPath = path.join(projectPath, ".mcp.json")
+    const content = await fs.readFile(mcpJsonPath, "utf-8")
+    const parsed = JSON.parse(content)
+
+    let servers: Record<string, McpServerConfig>
+    if (parsed.mcpServers && typeof parsed.mcpServers === "object") {
+      // Nested format: { "mcpServers": { "name": { ... } } }
+      servers = parsed.mcpServers
+    } else {
+      // Flat format: { "name": { "command": ..., ... } }
+      // Filter out non-server keys (a server entry should be an object with command or url)
+      servers = {}
+      for (const [key, value] of Object.entries(parsed)) {
+        if (
+          value &&
+          typeof value === "object" &&
+          !Array.isArray(value) &&
+          key !== "mcpServers"
+        ) {
+          servers[key] = value as McpServerConfig
+        }
+      }
+    }
+
+    return expandMcpServerEnvVars(servers)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.error(`[claude-config] Failed to read .mcp.json from ${projectPath}:`, error)
+    }
+    return {}
+  }
+}
+
+/**
+ * Read ~/.claude/.claude.json (v2.0.8+ user-scope config, same format as ~/.claude.json)
+ */
+export async function readClaudeDirConfig(): Promise<ClaudeConfig> {
+  try {
+    const content = await fs.readFile(CLAUDE_DIR_CONFIG_PATH, "utf-8")
+    return JSON.parse(content)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.error("[claude-config] Failed to read ~/.claude/.claude.json:", error)
+    }
+    return {}
+  }
+}
+
+/**
+ * Read ~/.claude/mcp.json (user-scope MCP definitions only)
+ * Format: { "mcpServers": { "name": { ... } } } or flat { "name": { ... } }
+ */
+export async function readClaudeDirMcpJson(): Promise<Record<string, McpServerConfig>> {
+  try {
+    const content = await fs.readFile(CLAUDE_DIR_MCP_PATH, "utf-8")
+    const parsed = JSON.parse(content)
+
+    if (parsed.mcpServers && typeof parsed.mcpServers === "object") {
+      return parsed.mcpServers
+    }
+    // Flat format
+    const servers: Record<string, McpServerConfig> = {}
+    for (const [key, value] of Object.entries(parsed)) {
+      if (value && typeof value === "object" && !Array.isArray(value) && key !== "mcpServers") {
+        servers[key] = value as McpServerConfig
+      }
+    }
+    return servers
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.error("[claude-config] Failed to read ~/.claude/mcp.json:", error)
+    }
+    return {}
+  }
+}
+
+/**
+ * Get merged global MCP servers from all user-level sources.
+ * Precedence (highest first): ~/.claude.json > ~/.claude/.claude.json > ~/.claude/mcp.json
+ */
+export async function getMergedGlobalMcpServers(
+  claudeConfig?: ClaudeConfig,
+  claudeDirConfig?: ClaudeConfig
+): Promise<Record<string, McpServerConfig>> {
+  const config = claudeConfig ?? (await readClaudeConfig())
+  const dirConfig = claudeDirConfig ?? (await readClaudeDirConfig())
+  const claudeDirMcp = await readClaudeDirMcpJson()
+
+  // Lower priority first, higher priority overwrites
+  return {
+    ...claudeDirMcp,
+    ...(dirConfig.mcpServers || {}),
+    ...(config.mcpServers || {}),
+  }
+}
+
+/**
+ * Get merged MCP servers for a specific project from per-project configs.
+ * Precedence (highest first): ~/.claude.json per-project > ~/.claude/.claude.json per-project
+ * Note: Does NOT include .mcp.json (caller handles that separately for caching)
+ */
+export async function getMergedLocalProjectMcpServers(
+  projectPath: string,
+  claudeConfig?: ClaudeConfig,
+  claudeDirConfig?: ClaudeConfig
+): Promise<Record<string, McpServerConfig>> {
+  const config = claudeConfig ?? (await readClaudeConfig())
+  const dirConfig = claudeDirConfig ?? (await readClaudeDirConfig())
+
+  const resolvedPath = resolveProjectPathFromWorktree(projectPath) || projectPath
+
+  const claudeDirProjectServers =
+    dirConfig.projects?.[resolvedPath]?.mcpServers || {}
+  const mainProjectServers =
+    config.projects?.[resolvedPath]?.mcpServers || {}
+
+  // Higher priority overwrites
+  return {
+    ...claudeDirProjectServers,
+    ...mainProjectServers,
   }
 }

@@ -71,7 +71,7 @@ export function ImageViewer({
   return (
     <div className="flex flex-col h-full bg-background">
       {/* Header */}
-      <div className="flex items-center justify-between px-2 h-10 border-b border-border/50 bg-background flex-shrink-0">
+      <div className="@container flex items-center justify-between px-2 h-10 border-b border-border/50 bg-background flex-shrink-0">
         {/* Left side: Close + mode switcher + file info */}
         <div className="flex items-center gap-1 min-w-0 flex-1">
           <Button
@@ -136,6 +136,7 @@ export function ImageViewer({
                 onClick={handleOpenInEditor}
                 className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer rounded-md px-1.5 py-1 hover:bg-accent hover:text-accent-foreground transition-colors"
               >
+                <span className="hidden @[400px]:inline">Open in</span>
                 {EDITOR_ICONS[preferredEditor] && (
                   <img
                     src={EDITOR_ICONS[preferredEditor]}
@@ -143,7 +144,6 @@ export function ImageViewer({
                     className="h-3.5 w-3.5 flex-shrink-0"
                   />
                 )}
-                <span>Open in {editorMeta.label}</span>
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom" showArrow={false}>

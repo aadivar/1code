@@ -125,25 +125,27 @@ export function useVoiceRecording(): UseVoiceRecordingReturn {
         audioContextRef.current = audioContext
         analyserRef.current = analyser
 
-        // Start audio level monitoring
+        // Start audio level monitoring (~20fps instead of 60fps to reduce React re-renders)
         const dataArray = new Uint8Array(analyser.frequencyBinCount)
+        let frameCount = 0
         const updateLevel = () => {
           if (!analyserRef.current) return
 
-          analyserRef.current.getByteFrequencyData(dataArray)
+          frameCount++
+          // Only update state every 3rd frame (~20fps) — CSS transitions smooth the gaps
+          if (frameCount % 3 === 0) {
+            analyserRef.current.getByteFrequencyData(dataArray)
 
-          // Calculate average amplitude from frequency data
-          let sum = 0
-          for (let i = 0; i < dataArray.length; i++) {
-            sum += dataArray[i] ?? 0
+            let sum = 0
+            for (let i = 0; i < dataArray.length; i++) {
+              sum += dataArray[i] ?? 0
+            }
+            const average = sum / dataArray.length
+            const raw = average / 255
+            const amplified = Math.pow(raw, 0.6) * 2.5
+            const normalized = Math.min(1, amplified)
+            setAudioLevel(normalized)
           }
-          const average = sum / dataArray.length
-          // Normalize to 0-1 with stronger amplification for better visibility
-          // Using power curve to make quiet sounds more visible
-          const raw = average / 255
-          const amplified = Math.pow(raw, 0.6) * 2.5 // Power curve + strong amplification
-          const normalized = Math.min(1, amplified)
-          setAudioLevel(normalized)
 
           animationFrameRef.current = requestAnimationFrame(updateLevel)
         }

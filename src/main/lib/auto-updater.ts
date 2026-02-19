@@ -92,21 +92,18 @@ function getChannelPrefPath(): string {
 }
 
 function getSavedChannel(): UpdateChannel {
-  // Beta channel disabled until beta-mac.yml is published to CDN.
-  // Always use "latest" to prevent 404 errors for users who toggled Early Access.
+  try {
+    const prefPath = getChannelPrefPath()
+    if (existsSync(prefPath)) {
+      const data = JSON.parse(readFileSync(prefPath, "utf-8"))
+      if (data.channel === "beta" || data.channel === "latest") {
+        return data.channel
+      }
+    }
+  } catch {
+    // Ignore read errors, fall back to default
+  }
   return "latest"
-  // try {
-  //   const prefPath = getChannelPrefPath()
-  //   if (existsSync(prefPath)) {
-  //     const data = JSON.parse(readFileSync(prefPath, "utf-8"))
-  //     if (data.channel === "beta" || data.channel === "latest") {
-  //       return data.channel
-  //     }
-  //   }
-  // } catch {
-  //   // Ignore read errors, fall back to default
-  // }
-  // return "latest"
 }
 
 function saveChannel(channel: UpdateChannel): void {
@@ -148,6 +145,9 @@ export async function initAutoUpdater(getWindows: () => BrowserWindow[]) {
 // Set update channel from saved preference
   const savedChannel = getSavedChannel()
   autoUpdater.channel = savedChannel
+  // electron-updater auto-sets allowDowngrade=true when channel is changed.
+  // We never want to offer a downgrade (e.g. beta 0.0.60-beta.5 when stable is 0.0.62).
+  autoUpdater.allowDowngrade = false
   log.info(`[AutoUpdater] Using update channel: ${savedChannel}`)
 
   // Load update source configuration
@@ -336,6 +336,9 @@ function registerIpcHandlers() {
     }
     log.info(`[AutoUpdater] Switching update channel to: ${channel}`)
     autoUpdater.channel = channel
+    // electron-updater auto-sets allowDowngrade=true when channel is changed.
+    // We never want to offer a downgrade — only show updates newer than current version.
+    autoUpdater.allowDowngrade = false
     saveChannel(channel)
     // Check for updates immediately with new channel
     if (app.isPackaged) {

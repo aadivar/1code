@@ -21,6 +21,8 @@ export const agentChatStore = {
   has: (id: string) => chats.has(id),
 
   delete: (id: string) => {
+    const chat = chats.get(id) as any
+    chat?.transport?.cleanup?.()
     chats.delete(id)
     streamIds.delete(id)
     parentChatIds.delete(id)
@@ -45,6 +47,9 @@ export const agentChatStore = {
   },
 
   clear: () => {
+    for (const chat of chats.values()) {
+      ;(chat as any)?.transport?.cleanup?.()
+    }
     chats.clear()
     streamIds.clear()
     parentChatIds.clear()

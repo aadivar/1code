@@ -760,7 +760,15 @@ const AgentChatItem = React.memo(function AgentChatItem({
               </ContextMenuSubContent>
             </ContextMenuSub>
             {isDesktop && (
-              <ContextMenuItem onClick={() => window.desktopApi?.newWindow({ chatId })}>
+              <ContextMenuItem onClick={async () => {
+                const result = await window.desktopApi?.newWindow({ chatId })
+                if (result?.blocked) {
+                  toast.info("This workspace is already open in another window", {
+                    description: "Switching to the existing window.",
+                    duration: 3000,
+                  })
+                }
+              }}>
                 Open in new window
               </ContextMenuItem>
             )}
@@ -2558,7 +2566,7 @@ export function AgentsSidebar({
     }
   }
 
-  const handleChatClick = useCallback((
+  const handleChatClick = useCallback(async (
     chatId: string,
     e?: React.MouseEvent,
     globalIndex?: number,
@@ -2622,6 +2630,24 @@ export function AgentsSidebar({
     const isRemote = chatId.startsWith('remote_')
     // Extract original ID for remote chats
     const originalId = isRemote ? chatId.replace(/^remote_/, '') : chatId
+
+    // Prevent opening same chat in multiple windows.
+    // Claim new chat BEFORE releasing old one — if claim fails, we keep the current chat.
+    if (window.desktopApi?.claimChat) {
+      const result = await window.desktopApi.claimChat(originalId)
+      if (!result.ok) {
+        toast.info("This workspace is already open in another window", {
+          description: "Switching to the existing window.",
+          duration: 3000,
+        })
+        await window.desktopApi.focusChatOwner(originalId)
+        return
+      }
+      // Release old chat only after new one is successfully claimed
+      if (selectedChatId && selectedChatId !== originalId) {
+        await window.desktopApi.releaseChat(selectedChatId)
+      }
+    }
 
     setSelectedChatId(originalId)
     setSelectedChatIsRemote(isRemote)
@@ -2707,8 +2733,12 @@ export function AgentsSidebar({
     }
 
     // Fetch both session count and worktree status in parallel
+    const isLocalMode = !chat?.branch
     const [sessionCount, worktreeStatus] = await Promise.all([
-      utils.terminal.getActiveSessionCount.fetch({ workspaceId: chatId }),
+      // Local mode: terminals are shared and won't be killed on archive, so skip count
+      isLocalMode
+        ? Promise.resolve(0)
+        : utils.terminal.getActiveSessionCount.fetch({ workspaceId: chatId }),
       utils.chats.getWorktreeStatus.fetch({ chatId }),
     ])
 

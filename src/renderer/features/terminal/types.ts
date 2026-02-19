@@ -15,6 +15,8 @@ export interface TerminalProps {
   paneId: string
   cwd: string
   workspaceId?: string
+  /** Terminal scope key for shared terminal support */
+  scopeKey?: string
   tabId?: string
   initialCommands?: string[]
   initialCwd?: string

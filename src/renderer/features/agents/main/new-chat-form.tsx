@@ -2,7 +2,7 @@
 
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useAtom, useAtomValue, useSetAtom } from "jotai"
-import { AlignJustify, Plus, Zap } from "lucide-react"
+import { AlignJustify, Plus } from "lucide-react"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { Button } from "../../../components/ui/button"
@@ -17,8 +17,6 @@ import {
   AttachIcon,
   BranchIcon,
   CheckIcon,
-  ClaudeCodeIcon,
-  CursorIcon,
   IconChevronDown,
   PlanIcon,
   SearchIcon,
@@ -33,6 +31,8 @@ import {
   agentsDebugModeAtom,
   justCreatedIdsAtom,
   lastSelectedAgentIdAtom,
+  lastSelectedCodexModelIdAtom,
+  lastSelectedCodexThinkingAtom,
   lastSelectedBranchesAtom,
   lastSelectedModelIdAtom,
   lastSelectedRepoAtom,
@@ -53,7 +53,14 @@ const selectedTeamIdAtom = atom<string | null>(null)
 import {
   agentsSettingsDialogOpenAtom,
   agentsSettingsDialogActiveTabAtom,
+  anthropicOnboardingCompletedAtom,
+  apiKeyOnboardingCompletedAtom,
+  codexApiKeyAtom,
+  codexOnboardingCompletedAtom,
   customClaudeConfigAtom,
+  extendedThinkingEnabledAtom,
+  hiddenModelsAtom,
+  normalizeCodexApiKey,
   normalizeCustomClaudeConfig,
   showOfflineModeFeaturesAtom,
   selectedOllamaModelAtom,
@@ -99,6 +106,7 @@ import {
 } from "../../../components/ui/prompt-input"
 import { agentsSidebarOpenAtom, agentsUnseenChangesAtom } from "../atoms"
 import { AgentSendButton } from "../components/agent-send-button"
+import { AgentModelSelector } from "../components/agent-model-selector"
 import { CreateBranchDialog } from "../components/create-branch-dialog"
 import { formatTimeAgo } from "../utils/format-time-ago"
 import { handlePasteEvent } from "../utils/paste-text"
@@ -110,16 +118,13 @@ import {
   markDraftVisible,
   type DraftProject,
 } from "../lib/drafts"
-import { CLAUDE_MODELS } from "../lib/models"
+import {
+  CLAUDE_MODELS,
+  CODEX_MODELS,
+  type CodexThinkingLevel,
+} from "../lib/models"
 // import type { PlanType } from "@/lib/config/subscription-plans"
 type PlanType = string
-
-// Codex icon (OpenAI style)
-const CodexIcon = (props: React.SVGProps<SVGSVGElement>) => (
-  <svg viewBox="0 0 24 24" fill="currentColor" {...props}>
-    <path d="M22.282 9.821a5.985 5.985 0 0 0-.516-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.985 5.985 0 0 0-3.998 2.9 6.046 6.046 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073zM13.26 22.43a4.476 4.476 0 0 1-2.876-1.04l.141-.081 4.779-2.758a.795.795 0 0 0 .392-.681v-6.737l2.02 1.168a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.494 4.494zM3.6 18.304a4.47 4.47 0 0 1-.535-3.014l.142.085 4.783 2.759a.771.771 0 0 0 .78 0l5.843-3.369v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.5 4.5 0 0 1-6.14-1.646zM2.34 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.676l5.815 3.355-2.02 1.168a.076.076 0 0 1-.071 0l-4.83-2.786A4.504 4.504 0 0 1 2.34 7.872zm16.597 3.855l-5.833-3.387L15.119 7.2a.076.076 0 0 1 .071 0l4.83 2.791a4.494 4.494 0 0 1-.676 8.105v-5.678a.79.79 0 0 0-.407-.667zm2.01-3.023l-.141-.085-4.774-2.782a.776.776 0 0 0-.785 0L9.409 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.5 4.5 0 0 1 6.68 4.66zm-12.64 4.135l-2.02-1.164a.08.08 0 0 1-.038-.057V6.075a4.5 4.5 0 0 1 7.375-3.453l-.142.08-4.778 2.758a.795.795 0 0 0-.393.681zm1.097-2.365l2.602-1.5 2.607 1.5v2.999l-2.597 1.5-2.607-1.5z" />
-  </svg>
-)
 
 // Hook to get available models (including offline models if Ollama is available and debug enabled)
 function useAvailableModels() {
@@ -163,7 +168,7 @@ function useAvailableModels() {
 const agents = [
   { id: "claude-code", name: "Claude Code", hasModels: true },
   { id: "cursor", name: "Cursor CLI", disabled: true },
-  { id: "codex", name: "OpenAI Codex", disabled: true },
+  { id: "codex", name: "OpenAI Codex" },
 ]
 
 interface NewChatFormProps {
@@ -235,6 +240,17 @@ export function NewChatForm({
   const normalizedCustomClaudeConfig =
     normalizeCustomClaudeConfig(customClaudeConfig)
   const hasCustomClaudeConfig = Boolean(normalizedCustomClaudeConfig)
+  // Connection status for providers
+  const anthropicOnboardingCompleted = useAtomValue(anthropicOnboardingCompletedAtom)
+  const apiKeyOnboardingCompleted = useAtomValue(apiKeyOnboardingCompletedAtom)
+  const codexOnboardingCompleted = useAtomValue(codexOnboardingCompletedAtom)
+  const { data: claudeCodeIntegration } =
+    trpc.claudeCode.getIntegration.useQuery()
+  const isClaudeConnected =
+    Boolean(claudeCodeIntegration?.isConnected) ||
+    anthropicOnboardingCompleted ||
+    apiKeyOnboardingCompleted ||
+    hasCustomClaudeConfig
   const setSettingsDialogOpen = useSetAtom(agentsSettingsDialogOpenAtom)
   const setSettingsActiveTab = useSetAtom(agentsSettingsDialogActiveTabAtom)
   const setJustCreatedIds = useSetAtom(justCreatedIdsAtom)
@@ -281,13 +297,39 @@ export function NewChatForm({
     if (!match) return null
     return `${match[1]}/${match[2].replace(/\.git$/, "")}`
   }
-  const [selectedAgent, setSelectedAgent] = useState(
-    () => agents.find((a) => a.id === lastSelectedAgentId) || agents[0],
+  const enabledAgents = useMemo(
+    () => agents.filter((agent) => !agent.disabled),
+    [],
   )
+  const fallbackAgent = enabledAgents[0] ?? agents[0]!
+  const [selectedAgent, setSelectedAgent] = useState(
+    () =>
+      enabledAgents.find((agent) => agent.id === lastSelectedAgentId) ||
+      fallbackAgent,
+  )
+
+  useEffect(() => {
+    const nextAgent =
+      enabledAgents.find((agent) => agent.id === lastSelectedAgentId) ||
+      fallbackAgent
+
+    if (nextAgent && nextAgent.id !== selectedAgent.id) {
+      setSelectedAgent(nextAgent)
+    }
+  }, [enabledAgents, fallbackAgent, lastSelectedAgentId, selectedAgent.id])
 
   // Get available models (with offline support)
   const availableModels = useAvailableModels()
   const [selectedOllamaModel, setSelectedOllamaModel] = useAtom(selectedOllamaModelAtom)
+  const [lastSelectedCodexModelId, setLastSelectedCodexModelId] = useAtom(
+    lastSelectedCodexModelIdAtom,
+  )
+  const [lastSelectedCodexThinking, setLastSelectedCodexThinking] = useAtom(
+    lastSelectedCodexThinkingAtom,
+  )
+  const [thinkingEnabled, setThinkingEnabled] = useAtom(
+    extendedThinkingEnabledAtom,
+  )
 
   const [selectedModel, setSelectedModel] = useState(
     () =>
@@ -302,8 +344,102 @@ export function NewChatForm({
     }
   }, [lastSelectedModelId])
 
+  const storedCodexApiKey = useAtomValue(codexApiKeyAtom)
+  const hasAppCodexApiKey = Boolean(normalizeCodexApiKey(storedCodexApiKey))
+  const hiddenModels = useAtomValue(hiddenModelsAtom)
+  const codexUiModels = useMemo(
+    () => {
+      let models = hasAppCodexApiKey
+        ? CODEX_MODELS.filter((model) => model.id !== "gpt-5.3-codex")
+        : CODEX_MODELS
+      return models.filter((model) => !hiddenModels.includes(model.id))
+    },
+    [hasAppCodexApiKey, hiddenModels],
+  )
+  const selectedCodexModel = useMemo(
+    () =>
+      codexUiModels.find((model) => model.id === lastSelectedCodexModelId) ||
+      codexUiModels[0] ||
+      CODEX_MODELS[0]!,
+    [codexUiModels, lastSelectedCodexModelId],
+  )
+
+  const selectedCodexThinking = useMemo<CodexThinkingLevel>(() => {
+    if (
+      selectedCodexModel.thinkings.includes(
+        lastSelectedCodexThinking as CodexThinkingLevel,
+      )
+    ) {
+      return lastSelectedCodexThinking as CodexThinkingLevel
+    }
+
+    if (selectedCodexModel.thinkings.includes("high")) {
+      return "high"
+    }
+
+    return selectedCodexModel.thinkings[0]!
+  }, [selectedCodexModel, lastSelectedCodexThinking])
+
+  useEffect(() => {
+    if (
+      selectedCodexModel.thinkings.includes(
+        lastSelectedCodexThinking as CodexThinkingLevel,
+      )
+    ) {
+      return
+    }
+
+    setLastSelectedCodexThinking(selectedCodexThinking)
+  }, [
+    selectedCodexModel,
+    lastSelectedCodexThinking,
+    selectedCodexThinking,
+    setLastSelectedCodexThinking,
+  ])
+
+  const selectedChatModel = useMemo(() => {
+    if (selectedAgent.id === "codex") {
+      return `${selectedCodexModel.id}/${selectedCodexThinking}`
+    }
+    return selectedModel?.id ?? "opus"
+  }, [
+    selectedAgent.id,
+    selectedCodexModel.id,
+    selectedCodexThinking,
+    selectedModel?.id,
+  ])
+
   // Determine current Ollama model (selected or recommended)
   const currentOllamaModel = selectedOllamaModel || availableModels.recommendedModel || availableModels.ollamaModels[0]
+  const claudeAgent =
+    enabledAgents.find((agent) => agent.id === "claude-code") || fallbackAgent
+  const selectedModelLabel = useMemo(() => {
+    if (selectedAgent.id === "codex") {
+      return selectedCodexModel.name
+    }
+
+    if (availableModels.isOffline && availableModels.hasOllama) {
+      return currentOllamaModel || "Ollama"
+    }
+
+    if (hasCustomClaudeConfig) {
+      return "Custom Model"
+    }
+
+    if (!selectedModel) {
+      return "Select model"
+    }
+
+    return `${selectedModel.name} ${selectedModel.version}`
+  }, [
+    selectedAgent.id,
+    selectedCodexModel.name,
+    availableModels.isOffline,
+    availableModels.hasOllama,
+    currentOllamaModel,
+    hasCustomClaudeConfig,
+    selectedModel,
+  ])
   const [repoPopoverOpen, setRepoPopoverOpen] = useState(false)
   const [branchPopoverOpen, setBranchPopoverOpen] = useState(false)
   const [lastSelectedBranches, setLastSelectedBranches] = useAtom(
@@ -960,19 +1096,6 @@ export function NewChatForm({
     await openFolder.mutateAsync()
   }
 
-  const getAgentIcon = (agentId: string, className?: string) => {
-    switch (agentId) {
-      case "claude-code":
-        return <ClaudeCodeIcon className={className} />
-      case "cursor":
-        return <CursorIcon className={className} />
-      case "codex":
-        return <CodexIcon className={className} />
-      default:
-        return null
-    }
-  }
-
   const trpcUtils = trpc.useUtils()
 
   const handleSend = useCallback(async () => {
@@ -1059,7 +1182,8 @@ export function NewChatForm({
         .map((pt) => {
           // Sanitize preview to remove special characters that break mention parsing
           const sanitizedPreview = pt.preview.replace(/[:\[\]|]/g, "")
-          return `@[${MENTION_PREFIXES.PASTED}${pt.size}:${sanitizedPreview}|${pt.filePath}]`
+          const prefix = pt.kind === "chatHistory" ? MENTION_PREFIXES.CHAT_HISTORY : MENTION_PREFIXES.PASTED
+          return `@[${prefix}${pt.size}:${sanitizedPreview}|${pt.filePath}]`
         })
         .join(" ")
       finalMessage = pastedMentions + (finalMessage ? " " + finalMessage : "")
@@ -1087,6 +1211,7 @@ export function NewChatForm({
     createChatMutation.mutate({
       projectId: selectedProject.id,
       name: message.trim().slice(0, 50), // Use first 50 chars as chat name
+      model: selectedChatModel,
       initialMessageParts: parts.length > 0 ? parts : undefined,
       baseBranch:
         workMode === "worktree" ? selectedBranch || undefined : undefined,
@@ -1107,6 +1232,7 @@ export function NewChatForm({
     images,
     files,
     pastedTexts,
+    selectedChatModel,
     agentMode,
     trpcUtils,
   ])
@@ -1743,111 +1869,68 @@ export function NewChatForm({
                           )}
                       </DropdownMenu>
 
-                      {/* Model selector - shows Ollama models when offline, Claude models when online */}
-                      {availableModels.isOffline && availableModels.hasOllama ? (
-                        // Offline mode: show Ollama model selector
-                        <DropdownMenu
+                      <div className="group/model-controls flex items-center gap-0.5">
+                        <AgentModelSelector
                           open={isModelDropdownOpen}
                           onOpenChange={setIsModelDropdownOpen}
-                        >
-                          <DropdownMenuTrigger asChild>
-                            <button
-                              className="flex items-center gap-1.5 px-2 py-1 text-sm text-muted-foreground hover:text-foreground transition-[background-color,color] duration-150 ease-out rounded-md hover:bg-muted/50 outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70 border border-border"
-                            >
-                              <Zap className="h-4 w-4" />
-                              <span>{currentOllamaModel || "Select model"}</span>
-                              <IconChevronDown className="h-3 w-3 shrink-0 opacity-50" />
-                            </button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="start" className="w-[240px]">
-                            {availableModels.ollamaModels.map((model) => {
-                              const isSelected = model === currentOllamaModel
-                              const isRecommended = model === availableModels.recommendedModel
-                              return (
-                                <DropdownMenuItem
-                                  key={model}
-                                  onClick={() => setSelectedOllamaModel(model)}
-                                  className="gap-2 justify-between"
-                                >
-                                  <div className="flex items-center gap-1.5">
-                                    <Zap className="h-4 w-4 text-muted-foreground shrink-0" />
-                                    <span>
-                                      {model}
-                                      {isRecommended && (
-                                        <span className="text-muted-foreground ml-1">(recommended)</span>
-                                      )}
-                                    </span>
-                                  </div>
-                                  {isSelected && (
-                                    <CheckIcon className="h-3.5 w-3.5 shrink-0" />
-                                  )}
-                                </DropdownMenuItem>
-                              )
-                            })}
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      ) : (
-                        // Online mode: show Claude model selector
-                        <DropdownMenu
-                          open={hasCustomClaudeConfig ? false : isModelDropdownOpen}
-                          onOpenChange={(open) => {
-                            if (!hasCustomClaudeConfig) {
-                              setIsModelDropdownOpen(open)
+                          selectedAgentId={selectedAgent.id as "claude-code" | "codex"}
+                          onSelectedAgentIdChange={(provider) => {
+                            if (provider === "claude-code") {
+                              setSelectedAgent(claudeAgent)
+                            } else {
+                              setSelectedAgent(enabledAgents.find((agent) => agent.id === "codex") || fallbackAgent)
                             }
+                            setLastSelectedAgentId(provider)
                           }}
-                        >
-                          <DropdownMenuTrigger asChild>
-                            <button
-                              disabled={hasCustomClaudeConfig}
-                              className={cn(
-                                "flex items-center gap-1.5 px-2 py-1 text-sm text-muted-foreground transition-[background-color,color] duration-150 ease-out rounded-md outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70",
-                                hasCustomClaudeConfig
-                                  ? "opacity-70 cursor-not-allowed"
-                                  : "hover:text-foreground hover:bg-muted/50",
-                              )}
-                            >
-                              <ClaudeCodeIcon className="h-3.5 w-3.5" />
-                              <span>
-                                {hasCustomClaudeConfig ? (
-                                  "Custom Model"
-                                ) : (
-                                  <>
-                                    {selectedModel?.name}{" "}
-                                    <span className="text-muted-foreground">{selectedModel?.version}</span>
-                                  </>
-                                )}
-                              </span>
-                              <IconChevronDown className="h-3 w-3 shrink-0 opacity-50" />
-                            </button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="start" className="w-[200px]">
-                            {availableModels.models.map((model) => {
-                              const isSelected = selectedModel?.id === model.id
-                              return (
-                                <DropdownMenuItem
-                                  key={model.id}
-                                  onClick={() => {
-                                    setSelectedModel(model)
-                                    setLastSelectedModelId(model.id)
-                                  }}
-                                  className="gap-2 justify-between"
-                                >
-                                  <div className="flex items-center gap-1.5">
-                                    <ClaudeCodeIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                                    <span>
-                                      {model.name}{" "}
-                                      <span className="text-muted-foreground">{model.version}</span>
-                                    </span>
-                                  </div>
-                                  {isSelected && (
-                                    <CheckIcon className="h-3.5 w-3.5 shrink-0" />
-                                  )}
-                                </DropdownMenuItem>
+                          selectedModelLabel={selectedModelLabel}
+                          onOpenModelsSettings={() => {
+                            setSettingsActiveTab("models")
+                            setSettingsDialogOpen(true)
+                          }}
+                          claude={{
+                            models: availableModels.models.filter((m) => !hiddenModels.includes(m.id)),
+                            selectedModelId: selectedModel?.id,
+                            onSelectModel: (modelId) => {
+                              const model =
+                                availableModels.models.find((m) => m.id === modelId) ||
+                                availableModels.models[0]
+                              if (!model) return
+                              setSelectedModel(model)
+                              setLastSelectedModelId(model.id)
+                            },
+                            hasCustomModelConfig: hasCustomClaudeConfig,
+                            isOffline: availableModels.isOffline && availableModels.hasOllama,
+                            ollamaModels: availableModels.ollamaModels,
+                            selectedOllamaModel: currentOllamaModel,
+                            recommendedOllamaModel: availableModels.recommendedModel,
+                            onSelectOllamaModel: setSelectedOllamaModel,
+                            isConnected: isClaudeConnected,
+                            thinkingEnabled,
+                            onThinkingChange: setThinkingEnabled,
+                          }}
+                          codex={{
+                            models: codexUiModels,
+                            selectedModelId: selectedCodexModel.id,
+                            onSelectModel: (modelId) => {
+                              const model = codexUiModels.find((item) => item.id === modelId)
+                              if (!model) return
+                              const nextThinking = model.thinkings.includes(
+                                lastSelectedCodexThinking as CodexThinkingLevel,
                               )
-                            })}
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      )}
+                                ? (lastSelectedCodexThinking as CodexThinkingLevel)
+                                : (model.thinkings.includes("high")
+                                  ? "high"
+                                  : model.thinkings[0]!)
+
+                              setLastSelectedCodexModelId(model.id)
+                              setLastSelectedCodexThinking(nextThinking)
+                            },
+                            selectedThinking: selectedCodexThinking,
+                            onSelectThinking: setLastSelectedCodexThinking,
+                            isConnected: codexOnboardingCompleted,
+                          }}
+                        />
+                      </div>
                     </div>
 
                     <div className="flex items-center gap-0.5 ml-auto flex-shrink-0">
@@ -2138,6 +2221,7 @@ export function NewChatForm({
                   createChatMutation.mutate({
                     projectId: validatedProject.id,
                     name: "Worktree Setup",
+                    model: selectedChatModel,
                     initialMessageParts: [
                       { type: "text", text: prompt },
                     ],

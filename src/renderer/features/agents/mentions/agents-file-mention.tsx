@@ -90,6 +90,7 @@ import {
   TxtIcon,
   GitIcon,
   NpmIcon,
+  UnknownFileIcon,
 } from "../../../icons/framework-icons"
 
 interface ChangedFile {
@@ -333,7 +334,7 @@ export function getFileIconByExtension(
     case "txt":
       return TxtIcon
     default:
-      return returnNullForUnknown ? null : FilesIcon
+      return returnNullForUnknown ? null : UnknownFileIcon
   }
 }
 
@@ -383,7 +384,7 @@ export function createFileIconElement(filename: string, type?: "file" | "folder"
       ? CustomAgentIcon
     : type === "folder"
       ? FolderOpenIcon
-      : (getFileIconByExtension(filename) ?? FilesIcon)
+      : (getFileIconByExtension(filename) ?? UnknownFileIcon)
   // Note: "category" type will use the default file icon based on filename, which is fine since
   // categories won't be inserted as mentions in the editor (they navigate to subpages)
 
@@ -416,7 +417,7 @@ export function createFileIconElement(filename: string, type?: "file" | "folder"
   }
 
   if (!svgElement || !(svgElement instanceof SVGSVGElement)) {
-    // Fallback: create a simple file icon
+    // Fallback: create unknown file icon
     const fallbackSvg = document.createElementNS(
       "http://www.w3.org/2000/svg",
       "svg",
@@ -432,19 +433,17 @@ export function createFileIconElement(filename: string, type?: "file" | "folder"
     fallbackSvg.className.baseVal =
       "h-3 w-3 text-muted-foreground flex-shrink-0"
 
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path")
-    path.setAttribute(
-      "d",
-      "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z",
-    )
-    fallbackSvg.appendChild(path)
-
-    const polyline = document.createElementNS(
-      "http://www.w3.org/2000/svg",
-      "polyline",
-    )
-    polyline.setAttribute("points", "14 2 14 8 20 8")
-    fallbackSvg.appendChild(polyline)
+    const paths = [
+      "M17 14.5L6.0001 14.4999",
+      "M11.2426 10.6215H5.99955",
+      "M11.2426 18.6215H5.99955",
+      "M16.7578 6.37887L5.99995 6.37896",
+    ]
+    for (const d of paths) {
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path")
+      path.setAttribute("d", d)
+      fallbackSvg.appendChild(path)
+    }
 
     return fallbackSvg
   }
@@ -513,7 +512,7 @@ export function getOptionIcon(option: { id?: string; label: string; type?: "file
   if (option.type === "folder") {
     return FolderIcon
   }
-  return getFileIconByExtension(option.label) ?? FilesIcon
+  return getFileIconByExtension(option.label) ?? UnknownFileIcon
 }
 
 /**

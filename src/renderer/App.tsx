@@ -12,12 +12,15 @@ import {
   AnthropicOnboardingPage,
   ApiKeyOnboardingPage,
   BillingMethodPage,
+  CodexOnboardingPage,
   SelectRepoPage,
 } from "./features/onboarding"
 import { identify, initAnalytics, shutdown } from "./lib/analytics"
 import {
-  anthropicOnboardingCompletedAtom, apiKeyOnboardingCompletedAtom,
-  billingMethodAtom
+  anthropicOnboardingCompletedAtom,
+  apiKeyOnboardingCompletedAtom,
+  billingMethodAtom,
+  codexOnboardingCompletedAtom,
 } from "./lib/atoms"
 import { appStore } from "./lib/jotai-store"
 import { VSCodeThemeProvider } from "./lib/themes/theme-provider"
@@ -50,26 +53,42 @@ function AppContent() {
   const setAnthropicOnboardingCompleted = useSetAtom(anthropicOnboardingCompletedAtom)
   const apiKeyOnboardingCompleted = useAtomValue(apiKeyOnboardingCompletedAtom)
   const setApiKeyOnboardingCompleted = useSetAtom(apiKeyOnboardingCompletedAtom)
+  const codexOnboardingCompleted = useAtomValue(codexOnboardingCompletedAtom)
   const selectedProject = useAtomValue(selectedProjectAtom)
   const setSelectedChatId = useSetAtom(selectedAgentChatIdAtom)
   const { setActiveSubChat, addToOpenSubChats, setChatId } = useAgentSubChatStore()
 
-  // Apply initial window params (chatId/subChatId/splitPaneIds) when opening via "Open in new window"
+  // Apply initial window params (chatId/subChatId) when opening via "Open in new window"
   useEffect(() => {
     const params = getInitialWindowParams()
     if (params.chatId) {
-      console.log("[App] Opening chat from window params:", params.chatId, params.subChatId, params.splitPaneIds)
+      console.log("[App] Opening chat from window params:", params.chatId, params.subChatId)
       setSelectedChatId(params.chatId)
       setChatId(params.chatId)
-      if (params.splitPaneIds && params.splitPaneIds.length >= 2) {
-        // Open all split panes in the new window
-        useAgentSubChatStore.getState().initSplitFromWindow(params.splitPaneIds)
-      } else if (params.subChatId) {
+      if (params.subChatId) {
         addToOpenSubChats(params.subChatId)
         setActiveSubChat(params.subChatId)
       }
     }
   }, [setSelectedChatId, setChatId, addToOpenSubChats, setActiveSubChat])
+
+  // Claim the initially selected chat to prevent duplicate windows.
+  // For new windows opened via "Open in new window", the chat is pre-claimed by main process.
+  // For restored windows (persisted localStorage), we need to claim here.
+  // Read atom directly from store to avoid stale closure with empty deps.
+  useEffect(() => {
+    if (!window.desktopApi?.claimChat) return
+    const currentChatId = appStore.get(selectedAgentChatIdAtom)
+    if (!currentChatId) return
+    window.desktopApi.claimChat(currentChatId).then((result) => {
+      if (!result.ok) {
+        // Another window already has this chat — clear our selection
+        setSelectedChatId(null)
+      }
+    })
+    // Only run on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Check if user has existing CLI config (API key or proxy)
   // Based on PR #29 by @sa4hnd
@@ -112,15 +131,24 @@ function AppContent() {
   // Determine which page to show:
   // 1. No billing method selected -> BillingMethodPage
   // 2. Claude subscription selected but not completed -> AnthropicOnboardingPage
-  // 3. API key or custom model selected but not completed -> ApiKeyOnboardingPage
-  // 4. No valid project selected -> SelectRepoPage
-  // 5. Otherwise -> AgentsLayout
+  // 3. Codex selected but not completed -> CodexOnboardingPage
+  // 4. API key or custom model selected but not completed -> ApiKeyOnboardingPage
+  // 5. No valid project selected -> SelectRepoPage
+  // 6. Otherwise -> AgentsLayout
   if (!billingMethod) {
     return <BillingMethodPage />
   }
 
   if (billingMethod === "claude-subscription" && !anthropicOnboardingCompleted) {
     return <AnthropicOnboardingPage />
+  }
+
+  if (
+    (billingMethod === "codex-subscription" ||
+      billingMethod === "codex-api-key") &&
+    !codexOnboardingCompleted
+  ) {
+    return <CodexOnboardingPage />
   }
 
   if (

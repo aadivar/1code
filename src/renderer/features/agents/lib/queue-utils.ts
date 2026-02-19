@@ -62,6 +62,7 @@ export interface QueuedPastedText {
   filename: string
   size: number
   preview: string
+  kind?: "pasted" | "chatHistory"
 }
 
 export type AgentQueueItem = {
@@ -175,6 +176,7 @@ export function toQueuedPastedText(pt: PastedTextFile): QueuedPastedText {
     filename: pt.filename,
     size: pt.size,
     preview: pt.preview,
+    kind: pt.kind,
   }
 }
 

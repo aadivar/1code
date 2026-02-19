@@ -62,6 +62,18 @@ const snapshotHistoryCache = new Map<string, Map<string, Map<string, TaskSnapsho
 // Map<subChatId, groupKey[]>
 const groupOrderCache = new Map<string, string[]>()
 
+const MAX_CACHED_SUBCHATS = 20
+
+function evictOldestCaches() {
+  if (snapshotHistoryCache.size > MAX_CACHED_SUBCHATS) {
+    const keys = Array.from(snapshotHistoryCache.keys())
+    for (const key of keys.slice(0, keys.length - MAX_CACHED_SUBCHATS)) {
+      snapshotHistoryCache.delete(key)
+      groupOrderCache.delete(key)
+    }
+  }
+}
+
 /**
  * Clear cached task snapshots for a specific subchat.
  * Call this when a subchat is closed/unmounted to prevent memory leaks.
@@ -825,6 +837,8 @@ export const AgentTaskToolsGroup = memo(function AgentTaskToolsGroup({
     if (groupIndex === -1) {
       groupOrder.push(groupKey)
     }
+
+    evictOldestCaches()
 
     return { previousSnapshot, currentSnapshot }
   }, [parts, subChatId])

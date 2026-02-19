@@ -99,6 +99,7 @@ export const AgentsSlashCommand = memo(function AgentsSlashCommand({
         try {
           const result = await trpcUtils.commands.getContent.fetch({
             path: option.path,
+            projectPath,
           })
 
           // Call onSelect with the fetched prompt

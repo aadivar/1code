@@ -24,6 +24,7 @@ interface AgentBashToolProps {
 
 // Extract command summary - first word of each command in a pipeline
 function extractCommandSummary(command: string): string {
+  if (!command || typeof command !== "string") return ""
   // First, normalize line continuations (backslash + newline) into single line
   const normalizedCommand = command.replace(/\\\s*\n\s*/g, " ")
   const parts = normalizedCommand.split(/\s*(?:&&|\|\||;|\|)\s*/)
@@ -38,7 +39,7 @@ function extractCommandSummary(command: string): string {
 
 // Replace absolute project paths with relative paths in a string
 function shortenPaths(text: string, projectPath: string | undefined): string {
-  if (!text || !projectPath) return text
+  if (!text || !projectPath || typeof text !== "string") return text || ""
   // Replace project path (with trailing slash) with empty string
   return text.replaceAll(projectPath + "/", "").replaceAll(projectPath, ".")
 }
@@ -64,7 +65,8 @@ export const AgentBashTool = memo(function AgentBashTool({
   const selectedProject = useAtomValue(selectedProjectAtom)
   const projectPath = selectedProject?.path
 
-  const command = part.input?.command || ""
+  const rawCommand = part.input?.command
+  const command = typeof rawCommand === "string" ? rawCommand : rawCommand ? String(rawCommand) : ""
   const stdout = part.output?.stdout || part.output?.output || ""
   const stderr = part.output?.stderr || ""
   const exitCode = part.output?.exitCode ?? part.output?.exit_code

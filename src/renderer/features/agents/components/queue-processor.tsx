@@ -9,6 +9,8 @@ import { agentChatStore } from "../stores/agent-chat-store"
 import { trackMessageSent } from "../../../lib/analytics"
 import { appStore } from "../../../lib/jotai-store"
 import { loadingSubChatsAtom, setLoading, clearLoading } from "../atoms"
+import { MENTION_PREFIXES } from "../mentions/agents-mentions-editor"
+import { utf8ToBase64 } from "../utils/base64"
 import type { AgentQueueItem } from "../lib/queue-utils"
 
 // Delay between processing queue items (ms)
@@ -89,8 +91,38 @@ export function QueueProcessor() {
           })),
         ]
 
-        if (item.message) {
-          parts.push({ type: "text", text: item.message })
+        // Expand text contexts, diff text contexts, and pasted texts as mention tokens
+        let mentionPrefix = ""
+
+        if (item.textContexts && item.textContexts.length > 0) {
+          const quoteMentions = item.textContexts.map((tc) => {
+            const preview = tc.text.slice(0, 50).replace(/[:\[\]]/g, "")
+            const encodedText = utf8ToBase64(tc.text)
+            return `@[${MENTION_PREFIXES.QUOTE}${preview}:${encodedText}]`
+          })
+          mentionPrefix += quoteMentions.join(" ") + " "
+        }
+
+        if (item.diffTextContexts && item.diffTextContexts.length > 0) {
+          const diffMentions = item.diffTextContexts.map((dtc) => {
+            const preview = dtc.text.slice(0, 50).replace(/[:\[\]]/g, "")
+            const encodedText = utf8ToBase64(dtc.text)
+            const lineNum = dtc.lineNumber || 0
+            return `@[${MENTION_PREFIXES.DIFF}${dtc.filePath}:${lineNum}:${preview}:${encodedText}]`
+          })
+          mentionPrefix += diffMentions.join(" ") + " "
+        }
+
+        if (item.pastedTexts && item.pastedTexts.length > 0) {
+          const pastedMentions = item.pastedTexts.map((pt) => {
+            const sanitizedPreview = pt.preview.replace(/[:\[\]|]/g, "")
+            return `@[${MENTION_PREFIXES.PASTED}${pt.size}:${sanitizedPreview}|${pt.filePath}]`
+          })
+          mentionPrefix += pastedMentions.join(" ") + " "
+        }
+
+        if (item.message || mentionPrefix) {
+          parts.push({ type: "text", text: mentionPrefix + (item.message || "") })
         }
 
         // Get mode from sub-chat store for analytics

@@ -238,29 +238,36 @@ CommandGroup.displayName = "CommandGroup"
 interface CommandItemProps extends React.HTMLAttributes<HTMLDivElement> {
   value?: string
   onSelect?: () => void
+  disabled?: boolean
 }
 
 const CommandItem = React.forwardRef<HTMLDivElement, CommandItemProps>(
-  ({ className, onSelect, value, onMouseEnter, ...props }, ref) => {
+  ({ className, onSelect, value, onMouseEnter, disabled, ...props }, ref) => {
     const context = React.useContext(CommandContext)
     const itemRef = React.useRef<HTMLDivElement>(null)
-    
+
     // Generate a stable value if not provided
     const itemValue = value || React.useId()
 
-    // Register this item with the Command
+    // Register this item with the Command (skip if disabled)
     React.useEffect(() => {
+      if (disabled) {
+        context?.registerItem(itemValue, null)
+        return
+      }
       const element = itemRef.current
       context?.registerItem(itemValue, element)
       return () => {
         context?.registerItem(itemValue, null)
       }
-    }, [context, itemValue])
+    }, [context, itemValue, disabled])
 
-    const isSelected = context?.selectedValue === itemValue
+    const isSelected = !disabled && context?.selectedValue === itemValue
 
     const handleMouseEnter = (e: React.MouseEvent<HTMLDivElement>) => {
-      context?.setSelectedValue(itemValue)
+      if (!disabled) {
+        context?.setSelectedValue(itemValue)
+      }
       onMouseEnter?.(e)
     }
 
@@ -269,12 +276,14 @@ const CommandItem = React.forwardRef<HTMLDivElement, CommandItemProps>(
         ref={itemRef}
         data-value={itemValue}
         data-selected={isSelected || undefined}
+        data-disabled={disabled || undefined}
         className={cn(
           overlayItem,
           isSelected && "bg-accent dark:bg-neutral-800 text-accent-foreground",
+          disabled && "opacity-40 pointer-events-none",
           className,
         )}
-        onClick={onSelect}
+        onClick={disabled ? undefined : onSelect}
         onMouseEnter={handleMouseEnter}
         {...props}
       />

@@ -1493,3 +1493,48 @@ export function CodeIcon({ className }: FrameworkIconProps) {
     </svg>
   )
 }
+
+// Unknown file icon - used as fallback for unrecognized file extensions
+export function UnknownFileIcon({ className }: FrameworkIconProps) {
+  return (
+    <svg
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className={cn("w-4 h-4", className)}
+    >
+      <g transform="scale(1.15) translate(-0.9, -0.9)">
+        <path
+          d="M17 14.5L6.0001 14.4999"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M11.2426 10.6215H5.99955"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M11.2426 18.6215H5.99955"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M16.7578 6.37887L5.99995 6.37896"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </g>
+    </svg>
+  )
+}

@@ -2,12 +2,13 @@
 
 import { useAtom, useSetAtom } from "jotai"
 import { X } from "lucide-react"
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { pendingAuthRetryMessageAtom } from "../../features/agents/atoms"
 import {
   agentsLoginModalOpenAtom,
   agentsSettingsDialogActiveTabAtom,
   agentsSettingsDialogOpenAtom,
+  anthropicOnboardingCompletedAtom,
   type SettingsTab,
 } from "../../lib/atoms"
 import { appStore } from "../../lib/jotai-store"
@@ -41,8 +42,19 @@ type AuthFlowState =
   | { step: "submitting" }
   | { step: "error"; message: string }
 
-export function ClaudeLoginModal() {
+type ClaudeLoginModalProps = {
+  hideCustomModelSettingsLink?: boolean
+  autoStartAuth?: boolean
+}
+
+export function ClaudeLoginModal({
+  hideCustomModelSettingsLink = false,
+  autoStartAuth = false,
+}: ClaudeLoginModalProps) {
   const [open, setOpen] = useAtom(agentsLoginModalOpenAtom)
+  const setAnthropicOnboardingCompleted = useSetAtom(
+    anthropicOnboardingCompletedAtom,
+  )
   const setSettingsOpen = useSetAtom(agentsSettingsDialogOpenAtom)
   const setSettingsActiveTab = useSetAtom(agentsSettingsDialogActiveTabAtom)
   const [flowState, setFlowState] = useState<AuthFlowState>({ step: "idle" })
@@ -51,11 +63,13 @@ export function ClaudeLoginModal() {
   const [urlOpened, setUrlOpened] = useState(false)
   const [savedOauthUrl, setSavedOauthUrl] = useState<string | null>(null)
   const urlOpenedRef = useRef(false)
+  const didAutoStartForOpenRef = useRef(false)
 
   // tRPC mutations
   const startAuthMutation = trpc.claudeCode.startAuth.useMutation()
   const submitCodeMutation = trpc.claudeCode.submitCode.useMutation()
   const openOAuthUrlMutation = trpc.claudeCode.openOAuthUrl.useMutation()
+  const trpcUtils = trpc.useUtils()
 
   // Poll for OAuth URL
   const pollStatusQuery = trpc.claudeCode.pollStatus.useQuery(
@@ -116,6 +130,7 @@ export function ClaudeLoginModal() {
       setUrlOpened(false)
       setSavedOauthUrl(null)
       urlOpenedRef.current = false
+      didAutoStartForOpenRef.current = false
       // Clear pending retry if modal closed without success (user cancelled)
       // Note: We don't clear here because success handler sets readyToRetry=true first
     }
@@ -124,7 +139,7 @@ export function ClaudeLoginModal() {
   // Helper to trigger retry after successful OAuth
   const triggerAuthRetry = () => {
     const pending = appStore.get(pendingAuthRetryMessageAtom)
-    if (pending) {
+    if (pending && pending.provider === "claude-code") {
       console.log("[ClaudeLoginModal] OAuth success - triggering retry for subChatId:", pending.subChatId)
       appStore.set(pendingAuthRetryMessageAtom, { ...pending, readyToRetry: true })
     }
@@ -133,10 +148,25 @@ export function ClaudeLoginModal() {
   // Helper to clear pending retry (on cancel/close without success)
   const clearPendingRetry = () => {
     const pending = appStore.get(pendingAuthRetryMessageAtom)
-    if (pending && !pending.readyToRetry) {
+    if (
+      pending &&
+      pending.provider === "claude-code" &&
+      !pending.readyToRetry
+    ) {
       console.log("[ClaudeLoginModal] Modal closed without success - clearing pending retry")
       appStore.set(pendingAuthRetryMessageAtom, null)
     }
+  }
+
+  const handleAuthSuccess = () => {
+    triggerAuthRetry()
+    setAnthropicOnboardingCompleted(true)
+    setOpen(false)
+    void Promise.allSettled([
+      trpcUtils.anthropicAccounts.list.invalidate(),
+      trpcUtils.anthropicAccounts.getActive.invalidate(),
+      trpcUtils.claudeCode.getIntegration.invalidate(),
+    ])
   }
 
   // Check if the code looks like a valid Claude auth code (format: XXX#YYY)
@@ -145,7 +175,7 @@ export function ClaudeLoginModal() {
     return trimmed.length > 50 && trimmed.includes("#")
   }
 
-  const handleConnectClick = async () => {
+  const handleConnectClick = useCallback(async () => {
     setUserClickedConnect(true)
 
     if (flowState.step === "has_url") {
@@ -190,7 +220,21 @@ export function ClaudeLoginModal() {
         })
       }
     }
-  }
+  }, [flowState, openOAuthUrlMutation, startAuthMutation])
+
+  useEffect(() => {
+    if (
+      !open ||
+      !autoStartAuth ||
+      flowState.step !== "idle" ||
+      didAutoStartForOpenRef.current
+    ) {
+      return
+    }
+
+    didAutoStartForOpenRef.current = true
+    void handleConnectClick()
+  }, [autoStartAuth, flowState.step, handleConnectClick, open])
 
   const handleSubmitCode = async () => {
     if (!authCode.trim() || flowState.step !== "has_url") return
@@ -204,9 +248,7 @@ export function ClaudeLoginModal() {
         sessionId,
         code: authCode.trim(),
       })
-      // Success - trigger retry and close modal
-      triggerAuthRetry()
-      setOpen(false)
+      handleAuthSuccess()
     } catch (err) {
       setFlowState({
         step: "error",
@@ -230,9 +272,7 @@ export function ClaudeLoginModal() {
             sessionId,
             code: value.trim(),
           })
-          // Success - trigger retry and close modal
-          triggerAuthRetry()
-          setOpen(false)
+          handleAuthSuccess()
         } catch (err) {
           setFlowState({
             step: "error",
@@ -375,15 +415,17 @@ export function ClaudeLoginModal() {
               </div>
             )}
 
-            <div className="text-center !mt-2">
-              <button
-                type="button"
-                onClick={handleOpenModelsSettings}
-                className="text-xs text-muted-foreground underline underline-offset-4 transition-colors hover:text-foreground"
-              >
-                Set a custom model in Settings
-              </button>
-            </div>
+            {!hideCustomModelSettingsLink && (
+              <div className="text-center !mt-2">
+                <button
+                  type="button"
+                  onClick={handleOpenModelsSettings}
+                  className="text-xs text-muted-foreground underline underline-offset-4 transition-colors hover:text-foreground"
+                >
+                  Set a custom model in Settings
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </AlertDialogContent>

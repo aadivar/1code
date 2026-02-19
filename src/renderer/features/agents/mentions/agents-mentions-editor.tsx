@@ -43,6 +43,7 @@ export const MENTION_PREFIXES = {
   QUOTE: "quote:", // Selected text from assistant messages
   DIFF: "diff:", // Selected text from diff sidebar
   PASTED: "pasted:", // Large pasted text saved as files
+  CHAT_HISTORY: "chatHistory:", // Chat history from another sub-chat/provider
 } as const
 
 type TriggerPayload = {

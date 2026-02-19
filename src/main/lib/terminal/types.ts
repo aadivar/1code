@@ -4,6 +4,8 @@ export interface TerminalSession {
 	pty: pty.IPty
 	paneId: string
 	workspaceId: string
+	/** Terminal scope key: "path:<dir>" for shared (local mode) or "ws:<chatId>" for isolated (worktree mode) */
+	scopeKey: string
 	cwd: string
 	cols: number
 	rows: number
@@ -38,6 +40,8 @@ export interface CreateSessionParams {
 	paneId: string
 	tabId?: string
 	workspaceId?: string
+	/** Terminal scope key: "path:<dir>" for shared (local mode) or "ws:<chatId>" for isolated (worktree mode) */
+	scopeKey?: string
 	workspaceName?: string
 	workspacePath?: string
 	rootPath?: string

@@ -168,7 +168,7 @@ export const ChatTitleEditor = memo(function ChatTitleEditor({
         <div
           onClick={handleClick}
           className={cn(
-            "text-left w-full h-full",
+            "text-left w-full h-full flex items-center",
             isMobile ? "text-base" : "text-lg",
             "font-medium",
             hasRealName ? "text-foreground cursor-pointer" : "cursor-default",

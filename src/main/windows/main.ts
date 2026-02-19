@@ -207,8 +207,37 @@ function registerIpcHandlers(): void {
   })
 
   // New window - optionally open with specific chat/subchat
-  ipcMain.handle("window:new", (_event, options?: { chatId?: string; subChatId?: string; splitPaneIds?: string[] }) => {
-    createWindow(options)
+  ipcMain.handle("window:new", (_event, options?: { chatId?: string; subChatId?: string }) => {
+    // If chatId specified, check ownership atomically via focusChatOwner
+    if (options?.chatId && windowManager.focusChatOwner(options.chatId)) {
+      return { blocked: true }
+    }
+
+    const win = createWindow(options)
+
+    // Pre-claim the chat for the new window
+    if (options?.chatId) {
+      windowManager.claimChat(options.chatId, win.id)
+    }
+
+    return { blocked: false }
+  })
+
+  // Chat ownership — prevent same chat open in multiple windows
+  ipcMain.handle("chat:claim", (event, chatId: string) => {
+    const win = getWindowFromEvent(event)
+    if (!win) return { ok: false, ownerStableId: "unknown" }
+    return windowManager.claimChat(chatId, win.id)
+  })
+
+  ipcMain.handle("chat:release", (event, chatId: string) => {
+    const win = getWindowFromEvent(event)
+    if (!win) return
+    windowManager.releaseChat(chatId, win.id)
+  })
+
+  ipcMain.handle("chat:focus-owner", (_event, chatId: string) => {
+    return windowManager.focusChatOwner(chatId)
   })
 
   // Set window title
@@ -573,7 +602,7 @@ function getUseNativeFramePreference(): boolean {
  * @param options.chatId Open this chat in the new window
  * @param options.subChatId Open this sub-chat in the new window
  */
-export function createWindow(options?: { chatId?: string; subChatId?: string; splitPaneIds?: string[] }): BrowserWindow {
+export function createWindow(options?: { chatId?: string; subChatId?: string }): BrowserWindow {
   // Register IPC handlers before creating first window
   registerIpcHandlers()
 
@@ -632,9 +661,10 @@ export function createWindow(options?: { chatId?: string; subChatId?: string; sp
   // Show window when ready
   window.on("ready-to-show", () => {
     console.log("[Main] Window", window.id, "ready to show")
-    // Always show native macOS traffic lights
+    // Start with traffic lights hidden - the renderer will show them
+    // after hydration based on the persisted sidebar state
     if (process.platform === "darwin") {
-      window.setWindowButtonVisibility(true)
+      window.setWindowButtonVisibility(false)
     }
     window.show()
   })
@@ -648,10 +678,9 @@ export function createWindow(options?: { chatId?: string; subChatId?: string; sp
     window.webContents.send("window:fullscreen-change", true)
   })
   window.on("leave-full-screen", () => {
-    // Show native traffic lights when exiting fullscreen
-    if (process.platform === "darwin") {
-      window.setWindowButtonVisibility(true)
-    }
+    // Don't force traffic lights visible here - the renderer will
+    // restore the correct visibility based on sidebar state when
+    // it receives the fullscreen-change event
     window.webContents.send("window:fullscreen-change", false)
   })
 
@@ -708,7 +737,6 @@ export function createWindow(options?: { chatId?: string; subChatId?: string; sp
       params.set("windowId", windowId)
       if (options?.chatId) params.set("chatId", options.chatId)
       if (options?.subChatId) params.set("subChatId", options.subChatId)
-      if (options?.splitPaneIds) params.set("splitPaneIds", JSON.stringify(options.splitPaneIds))
     }
 
     if (devServerUrl) {
@@ -739,12 +767,9 @@ export function createWindow(options?: { chatId?: string; subChatId?: string; sp
     }
   }
 
-  // Ensure native traffic lights are visible after page load
+  // Log page load - traffic light visibility is managed by the renderer
   window.webContents.on("did-finish-load", () => {
     console.log("[Main] Page finished loading in window", window.id)
-    if (process.platform === "darwin") {
-      window.setWindowButtonVisibility(true)
-    }
   })
   window.webContents.on(
     "did-fail-load",

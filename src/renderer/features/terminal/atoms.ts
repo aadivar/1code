@@ -64,17 +64,19 @@ export const terminalSearchOpenAtom = atom<Record<string, boolean>>({})
 // ============================================================================
 
 /**
- * Map of chatId -> terminal instances.
+ * Map of scopeKey -> terminal instances.
  * Window-scoped so each window manages its own terminal instances.
+ * Key is scopeKey: "path:<dir>" for shared (local mode) or "ws:<chatId>" for isolated (worktree).
  */
 export const terminalsAtom = atomWithWindowStorage<
   Record<string, TerminalInstance[]>
->("terminals-by-chat", {}, { getOnInit: true })
+>("terminals-by-scope", {}, { getOnInit: true })
 
 /**
- * Map of chatId -> active terminal id.
- * Window-scoped - tracks which terminal is currently active for each chat in this window.
+ * Map of scopeKey -> active terminal id.
+ * Window-scoped - tracks which terminal is currently active for each scope in this window.
+ * Key is scopeKey: "path:<dir>" for shared (local mode) or "ws:<chatId>" for isolated (worktree).
  */
 export const activeTerminalIdAtom = atomWithWindowStorage<
   Record<string, string | null>
->("active-terminal-by-chat", {}, { getOnInit: true })
+>("active-terminal-by-scope", {}, { getOnInit: true })

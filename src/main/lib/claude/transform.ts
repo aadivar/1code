@@ -427,6 +427,7 @@ export function createTransformer(options?: { isUsingOllama?: boolean }) {
 
     // ===== RESULT (final) =====
     if (msg.type === "result") {
+      currentParentToolUseId = null
       yield* endTextBlock()
       yield* endToolInput()
 

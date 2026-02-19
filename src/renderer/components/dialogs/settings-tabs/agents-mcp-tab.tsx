@@ -1,29 +1,57 @@
 "use client"
 
-import { Loader2, Plus } from "lucide-react"
-import { Button } from "../../ui/button"
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useAtomValue } from "jotai"
+import { Loader2, Plus, RefreshCw, Trash2 } from "lucide-react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
-import { useListKeyboardNav } from "./use-list-keyboard-nav"
+import {
+  lastSelectedAgentIdAtom,
+  selectedProjectAtom,
+  settingsMcpSidebarWidthAtom,
+} from "../../../features/agents/atoms"
 import { trpc } from "../../../lib/trpc"
 import { cn } from "../../../lib/utils"
+import { Button } from "../../ui/button"
 import { LoadingDot, OriginalMCPIcon } from "../../ui/icons"
 import { Input } from "../../ui/input"
 import { Label } from "../../ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select"
 import { ResizableSidebar } from "../../ui/resizable-sidebar"
-import { selectedProjectAtom, settingsMcpSidebarWidthAtom } from "../../../features/agents/atoms"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select"
+import { Switch } from "../../ui/switch"
 import {
-  AddMcpServerDialog,
-  EditMcpServerDialog,
+  DeleteServerConfirm,
   getStatusText,
   type McpServer,
   type ScopeType,
 } from "./mcp"
+import { useListKeyboardNav } from "./use-list-keyboard-nav"
+
+type McpProvider = "claude-code" | "codex"
+type ProviderSection = {
+  provider: McpProvider
+  title: "CODEX" | "CLAUDE CODE"
+}
+
+type ListedServer = {
+  key: string
+  provider: McpProvider
+  groupName: string
+  projectPath: string | null
+  server: McpServer
+}
 
 // Status indicator dot - exported for reuse in other components
-export function McpStatusDot({ status }: { status: string }) {
+export function McpStatusDot({
+  status,
+  disabled,
+}: {
+  status: string
+  disabled?: boolean
+}) {
+  if (disabled) {
+    return <span className="w-2 h-2 rounded-full bg-muted-foreground/30 shrink-0" />
+  }
+
   switch (status) {
     case "connected":
       return <span className="w-2 h-2 rounded-full bg-green-500 shrink-0" />
@@ -55,12 +83,48 @@ function getConnectionInfo(config: Record<string, unknown>) {
   return { type: "unknown" as const, url: undefined, command: undefined, args: undefined, env: undefined }
 }
 
+function isCodexHttpServer(provider: McpProvider, server: McpServer): boolean {
+  if (provider !== "codex") return false
+  const transportType = String((server.config as Record<string, unknown>).transportType || "").toLowerCase()
+  if (transportType === "http" || transportType === "sse" || transportType === "streamable_http") {
+    return true
+  }
+  return typeof (server.config as Record<string, unknown>).url === "string"
+}
+
+function isServerDisabled(server: McpServer): boolean {
+  const config = server.config as Record<string, unknown>
+  return config.disabled === true || config.enabled === false
+}
+
 // --- Detail Panel ---
-function McpServerDetail({ server, onAuth }: { server: McpServer; onAuth?: () => void }) {
+function McpServerDetail({
+  provider,
+  server,
+  onAuth,
+  onLogout,
+  onDelete,
+  onToggleEnabled,
+  isEditable,
+  isToggleable,
+  isToggling,
+}: {
+  provider: McpProvider
+  server: McpServer
+  onAuth?: () => void
+  onLogout?: () => void
+  onDelete?: () => void
+  onToggleEnabled?: (enabled: boolean) => void
+  isEditable?: boolean
+  isToggleable?: boolean
+  isToggling?: boolean
+}) {
   const { tools, needsAuth } = server
   const hasTools = tools.length > 0
   const isConnected = server.status === "connected"
+  const isDisabled = isServerDisabled(server)
   const connection = getConnectionInfo(server.config)
+  const hideToolsCount = isCodexHttpServer(provider, server)
 
   return (
     <div className="h-full overflow-y-auto">
@@ -70,9 +134,11 @@ function McpServerDetail({ server, onAuth }: { server: McpServer; onAuth?: () =>
           <div className="flex-1 min-w-0">
             <h3 className="text-sm font-semibold text-foreground truncate">{server.name}</h3>
             <p className="text-xs text-muted-foreground mt-0.5">
-              {isConnected
-                ? (hasTools ? `${tools.length} tool${tools.length !== 1 ? "s" : ""}` : "No tools")
-                : getStatusText(server.status)}
+              {isDisabled
+                ? "Disabled"
+                : isConnected
+                  ? (hideToolsCount ? "Connected" : (hasTools ? `${tools.length} tool${tools.length !== 1 ? "s" : ""}` : "No tools"))
+                  : getStatusText(server.status)}
               {server.serverInfo?.version && ` \u00B7 v${server.serverInfo.version}`}
             </p>
           </div>
@@ -81,7 +147,41 @@ function McpServerDetail({ server, onAuth }: { server: McpServer; onAuth?: () =>
               {isConnected ? "Reconnect" : "Authenticate"}
             </Button>
           )}
+          {onLogout && (
+            <Button variant="outline" size="sm" className="h-7 px-3 text-xs" onClick={onLogout}>
+              Logout
+            </Button>
+          )}
+          {isEditable && onDelete && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 w-7 p-0 text-red-500 hover:text-red-600 hover:bg-red-500/10"
+              onClick={onDelete}
+              aria-label="Delete server"
+              title="Delete server"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          )}
         </div>
+
+        {/* Enable/Disable Toggle */}
+        {isToggleable && onToggleEnabled && (
+          <div className="flex items-center justify-between">
+            <div>
+              <h5 className="text-xs font-medium text-foreground">Enabled</h5>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                Disable to prevent this server from connecting
+              </p>
+            </div>
+            <Switch
+              checked={!isDisabled}
+              onCheckedChange={onToggleEnabled}
+              disabled={isToggling}
+            />
+          </div>
+        )}
 
         {/* Connection Section */}
         <div>
@@ -90,24 +190,24 @@ function McpServerDetail({ server, onAuth }: { server: McpServer; onAuth?: () =>
             <div className="divide-y divide-border">
               <div className="flex gap-3 px-3 py-2">
                 <span className="text-xs text-muted-foreground w-16 shrink-0">Type</span>
-                <span className="text-xs text-foreground font-mono">{connection.type}</span>
+                <span className="text-xs text-foreground font-mono select-text">{connection.type}</span>
               </div>
               {connection.url && (
                 <div className="flex gap-3 px-3 py-2">
                   <span className="text-xs text-muted-foreground w-16 shrink-0">URL</span>
-                  <span className="text-xs text-foreground font-mono break-all">{connection.url}</span>
+                  <span className="text-xs text-foreground font-mono break-all select-text">{connection.url}</span>
                 </div>
               )}
               {connection.command && (
                 <div className="flex gap-3 px-3 py-2">
                   <span className="text-xs text-muted-foreground w-16 shrink-0">Command</span>
-                  <span className="text-xs text-foreground font-mono break-all">{connection.command}</span>
+                  <span className="text-xs text-foreground font-mono break-all select-text">{connection.command}</span>
                 </div>
               )}
               {connection.args && connection.args.length > 0 && (
                 <div className="flex gap-3 px-3 py-2">
                   <span className="text-xs text-muted-foreground w-16 shrink-0">Args</span>
-                  <span className="text-xs text-foreground font-mono break-all">{connection.args.join(" ")}</span>
+                  <span className="text-xs text-foreground font-mono break-all select-text">{connection.args.join(" ")}</span>
                 </div>
               )}
               {connection.env && Object.keys(connection.env).length > 0 && (
@@ -115,7 +215,7 @@ function McpServerDetail({ server, onAuth }: { server: McpServer; onAuth?: () =>
                   <span className="text-xs text-muted-foreground w-16 shrink-0">Env</span>
                   <div className="flex flex-wrap gap-1">
                     {Object.keys(connection.env).map((key) => (
-                      <span key={key} className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                      <span key={key} className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-muted text-muted-foreground select-text">
                         {key}
                       </span>
                     ))}
@@ -131,7 +231,7 @@ function McpServerDetail({ server, onAuth }: { server: McpServer; onAuth?: () =>
           <div>
             <h5 className="text-xs font-medium text-red-500 mb-2">Error</h5>
             <div className="rounded-md border border-red-500/20 bg-red-500/5 px-3 py-2">
-              <p className="text-xs text-red-400 font-mono break-all">{server.error}</p>
+              <p className="text-xs text-red-400 font-mono break-all select-text">{server.error}</p>
             </div>
           </div>
         )}
@@ -140,7 +240,7 @@ function McpServerDetail({ server, onAuth }: { server: McpServer; onAuth?: () =>
         {hasTools && (
           <div>
             <h5 className="text-xs font-medium text-foreground mb-3">
-              Tools ({tools.length})
+              {hideToolsCount ? "Tools" : `Tools (${tools.length})`}
             </h5>
             <div className="grid gap-2">
               {tools.map((tool, i) => {
@@ -158,6 +258,7 @@ function McpServerDetail({ server, onAuth }: { server: McpServer; onAuth?: () =>
             </div>
           </div>
         )}
+
       </div>
     </div>
   )
@@ -168,21 +269,33 @@ function CreateMcpServerForm({
   onCreated,
   onCancel,
   hasProject,
+  defaultProvider,
+  projectPath,
+  projectName,
 }: {
   onCreated: () => void
   onCancel: () => void
   hasProject: boolean
+  defaultProvider: McpProvider
+  projectPath?: string
+  projectName?: string
 }) {
-  const addServerMutation = trpc.claude.addMcpServer.useMutation()
-  const isSaving = addServerMutation.isPending
+  const addClaudeServerMutation = trpc.claude.addMcpServer.useMutation()
+  const addCodexServerMutation = trpc.codex.addMcpServer.useMutation()
+  const [provider, setProvider] = useState<McpProvider>(defaultProvider)
+  const isSaving =
+    provider === "codex"
+      ? addCodexServerMutation.isPending
+      : addClaudeServerMutation.isPending
   const [name, setName] = useState("")
   const [type, setType] = useState<"stdio" | "http">("stdio")
   const [command, setCommand] = useState("")
   const [args, setArgs] = useState("")
   const [url, setUrl] = useState("")
   const [scope, setScope] = useState<"global" | "project">("global")
+  const effectiveScope = provider === "codex" ? "global" : scope
 
-  const canSave = name.trim().length > 0 && (
+  const canSave = name.trim().length > 0 && (effectiveScope !== "project" || !!projectPath) && (
     (type === "stdio" && command.trim().length > 0) ||
     (type === "http" && url.trim().length > 0)
   )
@@ -190,15 +303,27 @@ function CreateMcpServerForm({
   const handleSubmit = async () => {
     const parsedArgs = args.trim() ? args.split(/\s+/) : undefined
     try {
-      await addServerMutation.mutateAsync({
-        name: name.trim(),
-        transport: type,
-        command: type === "stdio" ? command.trim() : undefined,
-        args: type === "stdio" ? parsedArgs : undefined,
-        url: type === "http" ? url.trim() : undefined,
-        scope,
-      })
-      toast.success("Server added", { description: name.trim() })
+      if (provider === "codex") {
+        await addCodexServerMutation.mutateAsync({
+          name: name.trim(),
+          transport: type,
+          command: type === "stdio" ? command.trim() : undefined,
+          args: type === "stdio" ? parsedArgs : undefined,
+          url: type === "http" ? url.trim() : undefined,
+          scope: "global",
+        })
+      } else {
+        await addClaudeServerMutation.mutateAsync({
+          name: name.trim(),
+          transport: type,
+          command: type === "stdio" ? command.trim() : undefined,
+          args: type === "stdio" ? parsedArgs : undefined,
+          url: type === "http" ? url.trim() : undefined,
+          scope: effectiveScope,
+          ...(effectiveScope === "project" && projectPath ? { projectPath } : {}),
+        })
+      }
+      toast.success(`"${name.trim()}" is added, refreshing...`)
       onCreated()
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to add server"
@@ -217,6 +342,28 @@ function CreateMcpServerForm({
               {isSaving ? "Adding..." : "Add"}
             </Button>
           </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label>Provider</Label>
+          <Select
+            value={provider}
+            onValueChange={(v) => {
+              const nextProvider = v as McpProvider
+              setProvider(nextProvider)
+              if (nextProvider === "codex") {
+                setScope("global")
+              }
+            }}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="codex">OpenAI Codex</SelectItem>
+              <SelectItem value="claude-code">Claude Code</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         <div className="space-y-1.5">
@@ -276,7 +423,19 @@ function CreateMcpServerForm({
           </div>
         )}
 
-        {hasProject && (
+        {provider === "codex" ? (
+          <div className="space-y-1.5">
+            <Label>Scope</Label>
+            <Select value="global" disabled>
+              <SelectTrigger disabled>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="global">Global (~/.codex/config.toml)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        ) : hasProject && (
           <div className="space-y-1.5">
             <Label>Scope</Label>
             <Select value={scope} onValueChange={(v) => setScope(v as "global" | "project")}>
@@ -285,7 +444,7 @@ function CreateMcpServerForm({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="global">Global (~/.claude.json)</SelectItem>
-                <SelectItem value="project">Project</SelectItem>
+                <SelectItem value="project">{projectName ? `Project: ${projectName}` : "Project"}</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -297,21 +456,27 @@ function CreateMcpServerForm({
 
 // --- Main Component ---
 export function AgentsMcpTab() {
+  const lastSelectedAgentId = useAtomValue(lastSelectedAgentIdAtom)
+  const defaultAddProvider: McpProvider =
+    lastSelectedAgentId === "codex" ? "codex" : "claude-code"
   const [selectedServerKey, setSelectedServerKey] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [showAddForm, setShowAddForm] = useState(false)
-  const searchInputRef = useRef<HTMLInputElement>(null)
-  const selectedProject = useAtomValue(selectedProjectAtom)
-
-  // Dialog state for Add/Edit MCP server dialogs
-  const [addDialogOpen, setAddDialogOpen] = useState(false)
-  const [editingServer, setEditingServer] = useState<{
+  const [deletingServer, setDeletingServer] = useState<{
+    provider: McpProvider
     server: McpServer
     scope: ScopeType
-    projectPath: string | null
+    projectPath?: string | null
   } | null>(null)
-
-  const updateMutation = trpc.claude.updateMcpServer.useMutation()
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const selectedProject = useAtomValue(selectedProjectAtom)
+  const providerSections = useMemo<ProviderSection[]>(
+    () => [
+      { provider: "claude-code", title: "CLAUDE CODE" },
+      { provider: "codex", title: "CODEX" },
+    ],
+    [],
+  )
 
   // Focus search on "/" hotkey
   useEffect(() => {
@@ -327,60 +492,100 @@ export function AgentsMcpTab() {
     return () => document.removeEventListener("keydown", handler)
   }, [])
 
-  const {
-    data: allMcpConfig,
-    isLoading: isLoadingConfig,
-    refetch,
-  } = trpc.claude.getAllMcpConfig.useQuery(undefined, {
+  const claudeMcpQuery = trpc.claude.getAllMcpConfig.useQuery(undefined, {
     staleTime: 10 * 60 * 1000,
   })
+  const codexMcpQuery = trpc.codex.getAllMcpConfig.useQuery(undefined, {
+    staleTime: 10 * 60 * 1000,
+  })
+  const hasAnyData = Boolean(claudeMcpQuery.data || codexMcpQuery.data)
+  const isLoadingConfig =
+    !hasAnyData && (claudeMcpQuery.isLoading || codexMcpQuery.isLoading)
+  const refreshClaudeMcpMutation = trpc.claude.refreshMcpConfig.useMutation()
+  const refreshCodexMcpMutation = trpc.codex.refreshMcpConfig.useMutation()
+  const isRefreshingConfig =
+    claudeMcpQuery.isFetching ||
+    codexMcpQuery.isFetching ||
+    refreshClaudeMcpMutation.isPending ||
+    refreshCodexMcpMutation.isPending
 
-  const [isManualRefreshing, setIsManualRefreshing] = useState(false)
-  const isRefreshing = isLoadingConfig || isManualRefreshing
+  const startClaudeOAuthMutation = trpc.claude.startMcpOAuth.useMutation()
+  const startCodexOAuthMutation = trpc.codex.startMcpOAuth.useMutation()
+  const logoutCodexMcpMutation = trpc.codex.logoutMcpServer.useMutation()
+  const updateMutation = trpc.claude.updateMcpServer.useMutation()
+  const removeClaudeMcpMutation = trpc.claude.removeMcpServer.useMutation()
+  const removeCodexMcpMutation = trpc.codex.removeMcpServer.useMutation()
 
-  const startOAuthMutation = trpc.claude.startMcpOAuth.useMutation()
-
-  const groups = useMemo(
-    () => (allMcpConfig?.groups || []).filter(g => g.mcpServers.length > 0),
-    [allMcpConfig?.groups]
-  )
-  const totalServers = useMemo(
-    () => groups.reduce((acc, g) => acc + g.mcpServers.length, 0),
-    [groups]
-  )
-
-  // Sort servers by status: connected first, then needs-auth, then failed/other
-  const sortedGroups = useMemo(() => {
+  const sortedGroupsByProvider = useMemo(() => {
     const statusOrder: Record<string, number> = {
       connected: 0,
       pending: 1,
       "needs-auth": 2,
       failed: 3,
     }
-    return groups.map((g) => ({
-      ...g,
-      mcpServers: [...g.mcpServers].sort(
-        (a, b) => (statusOrder[a.status] ?? 3) - (statusOrder[b.status] ?? 3)
-      ),
-    }))
-  }, [groups])
 
-  // Filter groups by search query
-  const filteredGroups = useMemo(() => {
-    if (!searchQuery.trim()) return sortedGroups
-    const q = searchQuery.toLowerCase()
-    return sortedGroups
-      .map((g) => ({
+    const sortGroups = (
+      groups: Array<{ groupName: string; projectPath: string | null; mcpServers: McpServer[] }>,
+    ) =>
+      groups.map((g) => ({
         ...g,
-        mcpServers: g.mcpServers.filter((s) => s.name.toLowerCase().includes(q)),
+        mcpServers: [...g.mcpServers].sort(
+          (a, b) => (statusOrder[a.status] ?? 3) - (statusOrder[b.status] ?? 3),
+        ),
       }))
-      .filter((g) => g.mcpServers.length > 0)
-  }, [sortedGroups, searchQuery])
+
+    return {
+      codex: sortGroups(codexMcpQuery.data?.groups || []),
+      claudeCode: sortGroups(claudeMcpQuery.data?.groups || []),
+    }
+  }, [codexMcpQuery.data?.groups, claudeMcpQuery.data?.groups])
+
+  const allListedServers = useMemo<ListedServer[]>(() => {
+    return providerSections.flatMap((section) => {
+      const groups =
+        section.provider === "codex"
+          ? sortedGroupsByProvider.codex
+          : sortedGroupsByProvider.claudeCode
+
+      return groups.flatMap((group) =>
+        group.mcpServers.map((server) => ({
+          key: `${section.provider}:${group.groupName}:${server.name}`,
+          provider: section.provider,
+          groupName: group.groupName,
+          projectPath: group.projectPath,
+          server,
+        })),
+      )
+    })
+  }, [providerSections, sortedGroupsByProvider])
+
+  const filteredListedServers = useMemo(() => {
+    if (!searchQuery.trim()) return allListedServers
+    const q = searchQuery.toLowerCase()
+    return allListedServers.filter((item) =>
+      item.server.name.toLowerCase().includes(q),
+    )
+  }, [allListedServers, searchQuery])
+
+  const filteredSections = useMemo(
+    () =>
+      providerSections
+        .map((section) => ({
+          ...section,
+          servers: filteredListedServers.filter(
+            (server) => server.provider === section.provider,
+          ),
+        }))
+        .filter((section) => section.servers.length > 0),
+    [providerSections, filteredListedServers],
+  )
+
+  const totalServers = allListedServers.length
 
   // Flat list of all server keys for keyboard navigation
   const allServerKeys = useMemo(
-    () => filteredGroups.flatMap((g) => g.mcpServers.map((s) => `${g.groupName}-${s.name}`)),
-    [filteredGroups]
+    () => filteredListedServers.map((server) => server.key),
+    [filteredListedServers],
   )
 
   const { containerRef: listRef, onKeyDown: listKeyDown } = useListKeyboardNav({
@@ -392,55 +597,78 @@ export function AgentsMcpTab() {
   // Auto-select first server when data loads (sorted, so connected first)
   useEffect(() => {
     if (selectedServerKey || isLoadingConfig) return
-    for (const group of sortedGroups) {
-      if (group.mcpServers.length > 0) {
-        setSelectedServerKey(`${group.groupName}-${group.mcpServers[0]!.name}`)
-        return
-      }
+    const firstServer = allListedServers[0]
+    if (firstServer) {
+      setSelectedServerKey(firstServer.key)
     }
-  }, [sortedGroups, selectedServerKey, isLoadingConfig])
+  }, [allListedServers, selectedServerKey, isLoadingConfig])
 
   // Find selected server
-  const selectedServer = useMemo(() => {
+  const selectedServer = useMemo<ListedServer | null>(() => {
     if (!selectedServerKey) return null
-    for (const group of groups) {
-      for (const server of group.mcpServers) {
-        if (`${group.groupName}-${server.name}` === selectedServerKey) {
-          return { server, group }
+    return (
+      allListedServers.find((server) => server.key === selectedServerKey) || null
+    )
+  }, [selectedServerKey, allListedServers])
+
+  const handleRefresh = useCallback(
+    async (silent = false, targetProvider?: McpProvider) => {
+      try {
+        if (targetProvider === "codex") {
+          await refreshCodexMcpMutation.mutateAsync()
+          await codexMcpQuery.refetch({ cancelRefetch: false })
+        } else if (targetProvider === "claude-code") {
+          await refreshClaudeMcpMutation.mutateAsync()
+          await claudeMcpQuery.refetch({ cancelRefetch: false })
+        } else {
+          await Promise.all([
+            refreshCodexMcpMutation.mutateAsync(),
+            refreshClaudeMcpMutation.mutateAsync(),
+          ])
+          await Promise.all([
+            codexMcpQuery.refetch({ cancelRefetch: false }),
+            claudeMcpQuery.refetch({ cancelRefetch: false }),
+          ])
+        }
+        if (!silent) {
+          toast.success("Refreshed MCP servers")
+        }
+      } catch {
+        if (!silent) {
+          toast.error("Failed to refresh MCP servers")
         }
       }
-    }
-    return null
-  }, [selectedServerKey, groups])
+    },
+    [
+      codexMcpQuery,
+      claudeMcpQuery,
+      refreshCodexMcpMutation,
+      refreshClaudeMcpMutation,
+    ],
+  )
 
-  const handleRefresh = useCallback(async (silent = false) => {
-    setIsManualRefreshing(true)
+
+  const handleAuth = async (
+    provider: McpProvider,
+    serverName: string,
+    projectPath: string | null,
+  ) => {
     try {
-      await refetch()
-      if (!silent) {
-        toast.success("Refreshed MCP servers")
-      }
-    } catch {
-      if (!silent) {
-        toast.error("Failed to refresh MCP servers")
-      }
-    } finally {
-      setIsManualRefreshing(false)
-    }
-  }, [refetch])
+      const result = provider === "codex"
+        ? await startCodexOAuthMutation.mutateAsync({
+            serverName,
+            ...(projectPath ? { projectPath } : {}),
+          })
+        : await startClaudeOAuthMutation.mutateAsync({
+            serverName,
+            projectPath: projectPath ?? "__global__",
+          })
 
-
-  const handleAuth = async (serverName: string, projectPath: string | null) => {
-    try {
-      const result = await startOAuthMutation.mutateAsync({
-        serverName,
-        projectPath: projectPath ?? "__global__",
-      })
       if (result.success) {
-        toast.success(`${serverName} authenticated, refreshing...`)
+        toast.success(`"${serverName}" is authenticated, refreshing...`)
         // Plugin servers get promoted to Global after OAuth — update selection
-        setSelectedServerKey(`Global-${serverName}`)
-        await handleRefresh(true)
+          setSelectedServerKey(`${provider}:Global:${serverName}`)
+        await handleRefresh(true, provider)
       } else {
         toast.error(result.error || "Authentication failed")
       }
@@ -450,32 +678,96 @@ export function AgentsMcpTab() {
     }
   }
 
-  const getScopeFromGroup = (groupName: string): ScopeType => {
-    if (groupName.toLowerCase().includes("global") || groupName.toLowerCase().includes("user")) {
-      return "global"
+  const handleCodexAuthLogout = async (
+    serverName: string,
+    projectPath?: string | null,
+  ) => {
+    try {
+      const result = await logoutCodexMcpMutation.mutateAsync({
+        serverName,
+        ...(projectPath ? { projectPath } : {}),
+      })
+      if (result.success) {
+        toast.success(`"${serverName}" is logged out, refreshing...`)
+        await handleRefresh(true, "codex")
+      } else {
+        toast.error(result.error || "Logout failed")
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Logout failed"
+      toast.error(message)
     }
-    return "project"
   }
 
-  const isEditableGroup = (groupName: string): boolean => {
-    // Plugin-managed servers are not directly editable
-    return !groupName.toLowerCase().includes("plugin")
-  }
-
-  const handleToggleEnabled = async (server: McpServer, group: { groupName: string; projectPath: string | null }, enabled: boolean) => {
+  const handleToggleEnabled = async (item: ListedServer, enabled: boolean) => {
+    if (item.provider !== "claude-code") return
     try {
       await updateMutation.mutateAsync({
-        name: server.name,
-        scope: getScopeFromGroup(group.groupName),
-        projectPath: group.projectPath ?? undefined,
+        name: item.server.name,
+        scope: getScopeFromServer(item),
+        projectPath: item.projectPath ?? undefined,
         disabled: !enabled,
       })
-      await handleRefresh(true)
+      toast.success(
+        enabled
+          ? `"${item.server.name}" is enabled, refreshing...`
+          : `"${item.server.name}" is disabled, refreshing...`,
+      )
+      await handleRefresh(true, "claude-code")
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to toggle server"
       toast.error(message)
     }
   }
+
+  const handleDelete = async () => {
+    if (!deletingServer) return
+    try {
+      if (deletingServer.provider === "codex") {
+        await removeCodexMcpMutation.mutateAsync({
+          name: deletingServer.server.name,
+          scope: "global",
+        })
+      } else {
+        await removeClaudeMcpMutation.mutateAsync({
+          name: deletingServer.server.name,
+          scope: deletingServer.scope,
+          projectPath: deletingServer.projectPath ?? undefined,
+        })
+      }
+      toast.success(`"${deletingServer.server.name}" is removed, refreshing...`)
+      setDeletingServer(null)
+      setSelectedServerKey(null)
+      await handleRefresh(true)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to remove server"
+      toast.error(message)
+    }
+  }
+
+  const canCodexLogout = (server: McpServer) => {
+    const authStatus = String(
+      (server.config as Record<string, unknown>).authStatus || "",
+    )
+      .trim()
+      .toLowerCase()
+    return authStatus === "o_auth" || authStatus === "bearer_token"
+  }
+
+  const isEditableServer = (item: ListedServer): boolean => {
+    if (item.provider === "codex") {
+      // Codex edit/delete currently supports global scope only.
+      return !item.projectPath
+    }
+    return !item.groupName.toLowerCase().includes("plugin")
+  }
+
+  const getScopeFromServer = (item: ListedServer): ScopeType =>
+    item.projectPath ? "project" : "global"
+
+  const isToggleableServer = (item: ListedServer): boolean =>
+    item.provider === "claude-code" &&
+    !item.groupName.toLowerCase().includes("plugin")
 
   return (
     <div className="flex h-full overflow-hidden">
@@ -494,14 +786,14 @@ export function AgentsMcpTab() {
       >
         <div className="flex flex-col h-full bg-background border-r overflow-hidden" style={{ borderRightWidth: "0.5px" }}>
           {/* Search + Add */}
-          <div className="px-2 pt-2 flex-shrink-0 flex items-center gap-1.5">
+          <div className="px-2 pt-2 flex-shrink-0 flex items-center">
             <input
               ref={searchInputRef}
               placeholder="Search servers..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={listKeyDown}
-              className="h-7 w-full rounded-lg text-sm bg-muted border border-input px-3 placeholder:text-muted-foreground/40 outline-none"
+              className="h-7 w-full rounded-lg text-sm bg-muted border border-input px-3 placeholder:text-muted-foreground/40 outline-none mr-1.5"
             />
             <button
               onClick={() => { setShowAddForm(true); setSelectedServerKey(null) }}
@@ -509,6 +801,14 @@ export function AgentsMcpTab() {
               title="Add MCP server"
             >
               <Plus className="h-4 w-4" />
+            </button>
+            <button
+              onClick={() => { void handleRefresh() }}
+              className="h-7 w-7 shrink-0 flex items-center justify-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-foreground/5 transition-colors cursor-pointer"
+              title="Refresh MCP servers"
+              aria-label="Refresh MCP servers"
+            >
+              <RefreshCw className={cn("h-3.5 w-3.5", isRefreshingConfig && "animate-spin")} />
             </button>
           </div>
           {/* Server list */}
@@ -531,16 +831,25 @@ export function AgentsMcpTab() {
                   Add server
                 </Button>
               </div>
-            ) : filteredGroups.length === 0 ? (
+            ) : filteredListedServers.length === 0 ? (
               <div className="flex items-center justify-center py-8">
                 <p className="text-xs text-muted-foreground">No results found</p>
               </div>
             ) : (
-              <div className="space-y-0.5">
-                {filteredGroups.map((group) => (
-                  <div key={group.groupName} className="space-y-0.5">
-                    {group.mcpServers.map((server) => {
-                      const key = `${group.groupName}-${server.name}`
+              <div className="space-y-2">
+                {filteredSections.map((section) => (
+                  <div key={section.provider} className="space-y-0.5">
+                    <div className="px-2 pb-1 pt-1">
+                      <p className="text-[10px] font-semibold tracking-[0.08em] text-muted-foreground">
+                        {section.title}
+                      </p>
+                      <div className="mt-1 h-px bg-border" />
+                    </div>
+                    {section.servers.map((item) => {
+                      const key = item.key
+                      const server = item.server
+                      const isDisabled = isServerDisabled(server)
+                      const hideToolsCount = isCodexHttpServer(item.provider, server)
                       const isSelected = selectedServerKey === key
                       return (
                         <button
@@ -553,28 +862,35 @@ export function AgentsMcpTab() {
                             "outline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/70",
                             isSelected
                               ? "bg-foreground/5 text-foreground"
-                              : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground"
+                              : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
                           )}
                         >
                           <div className="flex items-start gap-2">
                             <div className="flex-1 min-w-0 flex flex-col gap-0.5">
                               <div className="flex items-center gap-1">
-                                <span className="truncate block text-sm leading-tight flex-1">
+                                <span
+                                  className={cn(
+                                    "truncate block text-sm leading-tight flex-1",
+                                    isDisabled && "opacity-50",
+                                  )}
+                                >
                                   {server.name}
                                 </span>
                                 <div className="flex-shrink-0 w-3.5 h-3.5 flex items-center justify-center">
-                                  <McpStatusDot status={server.status} />
+                                  <McpStatusDot status={server.status} disabled={isDisabled} />
                                 </div>
                               </div>
                               <div className="flex items-center gap-1 text-[11px] text-muted-foreground/60 min-w-0">
                                 <span className="truncate flex-1 min-w-0">
-                                  {group.groupName}
+                                  {item.groupName}
                                 </span>
                                 {server.status !== "pending" && (
                                   <span className="flex-shrink-0">
-                                    {server.status === "connected"
-                                      ? `${server.tools.length} tool${server.tools.length !== 1 ? "s" : ""}`
-                                      : getStatusText(server.status)}
+                                    {isDisabled
+                                      ? "Disabled"
+                                      : server.status === "connected"
+                                        ? (hideToolsCount ? "Connected" : `${server.tools.length} tool${server.tools.length !== 1 ? "s" : ""}`)
+                                        : getStatusText(server.status)}
                                   </span>
                                 )}
                               </div>
@@ -599,11 +915,45 @@ export function AgentsMcpTab() {
             onCreated={() => { setShowAddForm(false); handleRefresh(true) }}
             onCancel={() => setShowAddForm(false)}
             hasProject={!!selectedProject?.path}
+            defaultProvider={defaultAddProvider}
+            projectPath={selectedProject?.path}
+            projectName={selectedProject?.name}
           />
         ) : selectedServer ? (
           <McpServerDetail
+            provider={selectedServer.provider}
             server={selectedServer.server}
-            onAuth={() => handleAuth(selectedServer.server.name, selectedServer.group.projectPath)}
+            onAuth={() =>
+              handleAuth(
+                selectedServer.provider,
+                selectedServer.server.name,
+                selectedServer.projectPath,
+              )
+            }
+            onLogout={
+              selectedServer.provider === "codex" && canCodexLogout(selectedServer.server)
+                ? () => handleCodexAuthLogout(selectedServer.server.name, selectedServer.projectPath)
+                : undefined
+            }
+            onDelete={
+              isEditableServer(selectedServer)
+                ? () =>
+                    setDeletingServer({
+                      provider: selectedServer.provider,
+                      server: selectedServer.server,
+                      scope: getScopeFromServer(selectedServer),
+                      projectPath: selectedServer.projectPath,
+                    })
+                : undefined
+            }
+            onToggleEnabled={
+              isToggleableServer(selectedServer)
+                ? (enabled) => handleToggleEnabled(selectedServer, enabled)
+                : undefined
+            }
+            isEditable={isEditableServer(selectedServer)}
+            isToggleable={isToggleableServer(selectedServer)}
+            isToggling={updateMutation.isPending}
           />
         ) : isLoadingConfig ? (
           <div className="flex items-center justify-center h-full">
@@ -632,19 +982,12 @@ export function AgentsMcpTab() {
         )}
       </div>
 
-      <AddMcpServerDialog
-        open={addDialogOpen}
-        onOpenChange={setAddDialogOpen}
-        onServerAdded={() => handleRefresh(true)}
-      />
-      <EditMcpServerDialog
-        open={!!editingServer}
-        onOpenChange={(open) => { if (!open) setEditingServer(null) }}
-        server={editingServer?.server || null}
-        scope={editingServer?.scope || "global"}
-        projectPath={editingServer?.projectPath ?? undefined}
-        onServerUpdated={() => handleRefresh(true)}
-        onServerDeleted={() => handleRefresh(true)}
+      <DeleteServerConfirm
+        open={!!deletingServer}
+        onOpenChange={(open) => { if (!open) setDeletingServer(null) }}
+        serverName={deletingServer?.server.name ?? ""}
+        onConfirm={handleDelete}
+        isDeleting={removeClaudeMcpMutation.isPending || removeCodexMcpMutation.isPending}
       />
     </div>
   )

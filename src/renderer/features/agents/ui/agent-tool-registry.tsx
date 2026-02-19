@@ -1,7 +1,6 @@
 "use client"
 
 import {
-  Database,
   Eye,
   FileCode2,
   FolderSearch,
@@ -12,7 +11,6 @@ import {
   Minimize2,
   Plus,
   RefreshCw,
-  Server,
   Terminal,
   XCircle,
 } from "lucide-react"
@@ -135,8 +133,9 @@ export const AgentToolRegistry: Record<string, ToolMeta> = {
       const isPending =
         part.state !== "output-available" && part.state !== "output-error"
       const isInputStreaming = part.state === "input-streaming"
-      if (isInputStreaming) return "Preparing subagent"
-      return isPending ? "Running Subagent" : "Completed Subagent"
+      if (isInputStreaming) return "Preparing agent"
+      const subagentType = part.input?.subagent_type || "Agent"
+      return isPending ? `Running ${subagentType}` : `${subagentType} completed`
     },
     subtitle: (part) => {
       // Don't show subtitle while input is still streaming
@@ -577,34 +576,8 @@ export const AgentToolRegistry: Record<string, ToolMeta> = {
     variant: "simple",
   },
 
-  // MCP tools
-  "tool-ListMcpResources": {
-    icon: Server,
-    title: (part) => {
-      const isPending =
-        part.state !== "output-available" && part.state !== "output-error"
-      return isPending ? "Listing resources" : "Listed resources"
-    },
-    subtitle: (part) => {
-      const server = part.input?.server || ""
-      return server
-    },
-    variant: "simple",
-  },
-
-  "tool-ReadMcpResource": {
-    icon: Database,
-    title: (part) => {
-      const isPending =
-        part.state !== "output-available" && part.state !== "output-error"
-      return isPending ? "Reading resource" : "Read resource"
-    },
-    subtitle: (part) => {
-      const uri = part.input?.uri || ""
-      return uri.length > 30 ? "..." + uri.slice(-27) : uri
-    },
-    variant: "simple",
-  },
+  // Note: ListMcpResources, ReadMcpResource and their "Tool"-suffixed variants
+  // are handled by AgentMcpToolCall via parseMcpToolType() for richer output display
 
   // System tools
   "tool-Compact": {
@@ -634,4 +607,79 @@ export const AgentToolRegistry: Record<string, ToolMeta> = {
     },
     variant: "collapsible",
   },
+}
+
+// ============================================================================
+// MCP TOOL PARSING
+// ============================================================================
+
+const MCP_TOOL_PREFIX = "tool-mcp__"
+
+export type McpToolCategory =
+  | "search"
+  | "list"
+  | "get"
+  | "create"
+  | "update"
+  | "delete"
+  | "send"
+  | "generate"
+  | "other"
+
+export interface McpToolInfo {
+  serverName: string
+  toolName: string
+  displayName: string
+  category: McpToolCategory
+}
+
+// Built-in MCP tools (not prefixed with mcp__<server>__)
+const BUILTIN_MCP_TOOLS: Record<string, McpToolInfo> = {
+  "tool-ListMcpResources": { serverName: "mcp", toolName: "list_resources", displayName: "List Resources", category: "list" },
+  "tool-ListMcpResourcesTool": { serverName: "mcp", toolName: "list_resources", displayName: "List Resources", category: "list" },
+  "tool-ReadMcpResource": { serverName: "mcp", toolName: "read_resource", displayName: "Read Resource", category: "get" },
+  "tool-ReadMcpResourceTool": { serverName: "mcp", toolName: "read_resource", displayName: "Read Resource", category: "get" },
+}
+
+export function parseMcpToolType(partType: string): McpToolInfo | null {
+  // Check built-in MCP tools first
+  const builtin = BUILTIN_MCP_TOOLS[partType]
+  if (builtin) return builtin
+
+  if (!partType.startsWith(MCP_TOOL_PREFIX)) return null
+
+  const withoutPrefix = partType.slice(MCP_TOOL_PREFIX.length)
+  const separatorIndex = withoutPrefix.indexOf("__")
+  if (separatorIndex === -1) return null
+
+  const serverName = withoutPrefix.slice(0, separatorIndex)
+  const toolName = withoutPrefix.slice(separatorIndex + 2)
+
+  return {
+    serverName,
+    toolName,
+    displayName: formatMcpToolName(toolName),
+    category: categorizeMcpTool(toolName),
+  }
+}
+
+export function formatMcpToolName(toolName: string): string {
+  return toolName
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+function categorizeMcpTool(toolName: string): McpToolCategory {
+  const lower = toolName.toLowerCase()
+  if (lower.startsWith("search_") || lower.startsWith("query_")) return "search"
+  if (lower.startsWith("list_")) return "list"
+  if (lower.startsWith("get_") || lower.startsWith("fetch_") || lower.startsWith("retrieve_")) return "get"
+  if (lower.startsWith("create_") || lower.startsWith("add_") || lower.startsWith("draft_")) return "create"
+  if (lower.startsWith("update_") || lower.startsWith("modify_") || lower.startsWith("manage_")) return "update"
+  if (lower.startsWith("delete_") || lower.startsWith("remove_")) return "delete"
+  if (lower.startsWith("send_")) return "send"
+  if (lower.startsWith("generate_")) return "generate"
+  return "other"
 }

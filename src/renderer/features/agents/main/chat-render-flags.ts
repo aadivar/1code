@@ -1,2 +1,0 @@
-export const USE_VIRTUOSO_CHAT = true
-export const VIRTUOSO_FOLLOW_BOTTOM_THRESHOLD_PX = 50

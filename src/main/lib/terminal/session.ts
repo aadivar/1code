@@ -156,6 +156,7 @@ export async function createSession(
 		pty: ptyProcess,
 		paneId,
 		workspaceId: workspaceId || "",
+		scopeKey: params.scopeKey || workspaceId || "",
 		cwd: workingDir,
 		cols: terminalCols,
 		rows: terminalRows,

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef } from "react"
+import { memo, useEffect, useRef } from "react"
 import { cn } from "../../../lib/utils"
 
 interface VoiceWaveIndicatorProps {
@@ -13,7 +13,7 @@ interface VoiceWaveIndicatorProps {
  * Animated sound wave indicator that visualizes audio input
  * Shows animated bars that respond to real audio levels
  */
-export function VoiceWaveIndicator({
+export const VoiceWaveIndicator = memo(function VoiceWaveIndicator({
   isRecording,
   audioLevel,
   className,
@@ -34,8 +34,8 @@ export function VoiceWaveIndicator({
     barsRef.current.forEach((bar, index) => {
       if (!bar) return
 
-      // Create wave pattern - center bars are taller
-      const centerFactor = 1 - Math.abs(index - 2) * 0.12 // 0,1,2,3,4 -> factors 0.76, 0.88, 1, 0.88, 0.76
+      // Create wave pattern - center bars are taller, edges noticeably shorter
+      const centerFactor = [0.45, 0.7, 1, 0.7, 0.45][index] ?? 1
 
       // Add slight randomness for organic feel
       const randomVariation = 0.9 + Math.random() * 0.2
@@ -71,4 +71,4 @@ export function VoiceWaveIndicator({
       ))}
     </div>
   )
-}
+})
