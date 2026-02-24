@@ -1,13 +1,13 @@
 "use client"
 
-import { createContext, memo, useMemo } from "react"
+import { createContext, memo, useCallback, useMemo } from "react"
 import { useAtomValue } from "jotai"
 import {
+  getPerChatMessageKey,
   messageAtomFamily,
-  assistantIdsForUserMsgAtomFamily,
-  isLastUserMessageAtomFamily,
-  rollbackTargetSdkUuidForUserMsgAtomFamily,
-  isStreamingAtom,
+  assistantIdsPerChatAtomFamily,
+  isLastUserMessagePerChatAtomFamily,
+  rollbackTargetPerChatAtomFamily,
   isRollingBackAtom,
 } from "../stores/message-store"
 import { MemoizedAssistantMessages } from "./messages-list"
@@ -16,6 +16,7 @@ import { AgentImageItem } from "../ui/agent-image-item"
 import { IconTextUndo } from "../../../components/ui/icons"
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../../components/ui/tooltip"
 import { cn } from "../../../lib/utils"
+import { useStreamingStatusStore } from "../stores/streaming-status-store"
 
 // Context for fork callback - avoids threading props through MemoizedAssistantMessages
 export const ForkContext = createContext<((messageId: string) => void) | null>(null)
@@ -104,11 +105,15 @@ export const IsolatedMessageGroup = memo(function IsolatedMessageGroup({
   toolRegistry,
 }: IsolatedMessageGroupProps) {
   // Subscribe to specific atoms - NOT the whole messages array
-  const userMsg = useAtomValue(messageAtomFamily(userMsgId))
-  const assistantIds = useAtomValue(assistantIdsForUserMsgAtomFamily(userMsgId))
-  const isLastGroup = useAtomValue(isLastUserMessageAtomFamily(userMsgId))
-  const rollbackTargetSdkUuid = useAtomValue(rollbackTargetSdkUuidForUserMsgAtomFamily(userMsgId))
-  const isStreaming = useAtomValue(isStreamingAtom)
+  const perChatKey = `${subChatId}:${userMsgId}`
+  const userMsg = useAtomValue(messageAtomFamily(getPerChatMessageKey(subChatId, userMsgId)))
+  const assistantIds = useAtomValue(assistantIdsPerChatAtomFamily(perChatKey))
+  const isLastGroup = useAtomValue(isLastUserMessagePerChatAtomFamily(perChatKey))
+  const rollbackTargetSdkUuid = useAtomValue(rollbackTargetPerChatAtomFamily(perChatKey))
+  const subChatStatus = useStreamingStatusStore(
+    useCallback((state) => state.statuses[subChatId] ?? "ready", [subChatId]),
+  )
+  const isStreaming = subChatStatus === "streaming" || subChatStatus === "submitted"
   const isRollingBack = useAtomValue(isRollingBackAtom)
 
   // Show rollback button only when this user turn has a valid rollback target.

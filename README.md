@@ -228,15 +228,21 @@ Claude asks clarifying questions, builds structured plans, and shows clean markd
 ```bash
 bun install
 bun run claude:download
+bun run codex:download
 bun run build
 bun run package:mac  # or package:win, package:linux
 ```
+
+> **Important:** The `claude:download` and `codex:download` steps download required agent binaries. If you skip them, the app may build but agent functionality will not work correctly.
+>
+> **Python note:** Python 3.11 is recommended for native module rebuilds. On Python 3.12+, make sure `setuptools` is installed (`pip install setuptools`).
 
 ## Development
 
 ```bash
 bun install
 bun run claude:download  # First time only
+bun run codex:download   # First time only
 bun run dev
 ```
 

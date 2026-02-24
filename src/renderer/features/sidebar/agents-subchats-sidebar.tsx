@@ -206,7 +206,18 @@ export function AgentsSubChatsSidebar({
   agentName,
 }: AgentsSubChatsSidebarProps) {
   // Use shallow comparison to prevent re-renders when arrays have same content
-  const { activeSubChatId, openSubChatIds, pinnedSubChatIds, allSubChats, parentChatId, togglePinSubChat } = useAgentSubChatStore(
+  const {
+    activeSubChatId,
+    openSubChatIds,
+    pinnedSubChatIds,
+    allSubChats,
+    parentChatId,
+    togglePinSubChat,
+    splitPaneIds,
+    addToSplit,
+    removeFromSplit,
+    closeSplit,
+  } = useAgentSubChatStore(
     useShallow((state) => ({
       activeSubChatId: state.activeSubChatId,
       openSubChatIds: state.openSubChatIds,
@@ -214,6 +225,10 @@ export function AgentsSubChatsSidebar({
       allSubChats: state.allSubChats,
       parentChatId: state.chatId,
       togglePinSubChat: state.togglePinSubChat,
+      splitPaneIds: state.splitPaneIds,
+      addToSplit: state.addToSplit,
+      removeFromSplit: state.removeFromSplit,
+      closeSplit: state.closeSplit,
     }))
   )
   const [loadingSubChats] = useAtom(loadingSubChatsAtom)
@@ -326,9 +341,18 @@ export function AgentsSubChatsSidebar({
   const chatSourceMode = useAtomValue(chatSourceModeAtom)
 
   // Map open IDs to metadata and sort by updated_at (most recent first)
+  const allSubChatsById = useMemo(() => {
+    const map = new Map<string, SubChatMeta>()
+    for (const chat of allSubChats) {
+      map.set(chat.id, chat)
+    }
+    return map
+  }, [allSubChats])
+
+  // Map open IDs to metadata and sort by updated_at (most recent first)
   const openSubChats = useMemo(() => {
     const chats = openSubChatIds
-      .map((id) => allSubChats.find((sc) => sc.id === id))
+      .map((id) => allSubChatsById.get(id))
       .filter((sc): sc is SubChatMeta => !!sc)
       .sort((a, b) => {
         const aT = new Date(a.updated_at || a.created_at || "0").getTime()
@@ -336,8 +360,25 @@ export function AgentsSubChatsSidebar({
         return bT - aT // Most recent first
       })
 
-    return chats
-  }, [openSubChatIds, allSubChats])
+    if (splitPaneIds.length < 2) return chats
+
+    const splitIdsSet = new Set(splitPaneIds)
+    const firstSplitIdx = chats.findIndex((chat) => splitIdsSet.has(chat.id))
+    if (firstSplitIdx < 0) return chats
+
+    const splitChats = chats
+      .filter((chat) => splitIdsSet.has(chat.id))
+      .sort((a, b) => splitPaneIds.indexOf(a.id) - splitPaneIds.indexOf(b.id))
+    const nonSplitChats = chats.filter((chat) => !splitIdsSet.has(chat.id))
+    const insertAt = Math.min(firstSplitIdx, nonSplitChats.length)
+
+    return [
+      ...nonSplitChats.slice(0, insertAt),
+      ...splitChats,
+      ...nonSplitChats.slice(insertAt),
+    ]
+  }, [openSubChatIds, allSubChatsById, splitPaneIds])
+  const splitPaneIdSet = useMemo(() => new Set(splitPaneIds), [splitPaneIds])
 
   // Filter and separate pinned/unpinned sub-chats
   const { pinnedChats, unpinnedChats } = useMemo(() => {
@@ -358,6 +399,13 @@ export function AgentsSubChatsSidebar({
   const filteredSubChats = useMemo(() => {
     return [...pinnedChats, ...unpinnedChats]
   }, [pinnedChats, unpinnedChats])
+  const filteredIndexById = useMemo(() => {
+    const map = new Map<string, number>()
+    filteredSubChats.forEach((chat, idx) => {
+      map.set(chat.id, idx)
+    })
+    return map
+  }, [filteredSubChats])
 
   // Reset focused index when search query changes
   React.useEffect(() => {
@@ -1214,15 +1262,23 @@ export function AgentsSubChatsSidebar({
                         </h3>
                       </div>
                       <div className="list-none p-0 m-0 mb-3">
-                        {pinnedChats.map((subChat, index) => {
+                        {pinnedChats.map((subChat) => {
                           const isSubChatLoading = loadingChatIds.has(
                             subChat.id,
                           )
                           const isActive = activeSubChatId === subChat.id
                           const isPinned = pinnedSubChatIds.includes(subChat.id)
-                          const globalIndex = filteredSubChats.findIndex(
-                            (c) => c.id === subChat.id,
-                          )
+                          const globalIndex = filteredIndexById.get(subChat.id) ?? -1
+                          const isSplitTab = splitPaneIdSet.has(subChat.id)
+                          const hasSplitPrev =
+                            isSplitTab &&
+                            globalIndex > 0 &&
+                            splitPaneIdSet.has(filteredSubChats[globalIndex - 1]?.id)
+                          const hasSplitNext =
+                            isSplitTab &&
+                            globalIndex >= 0 &&
+                            globalIndex < filteredSubChats.length - 1 &&
+                            splitPaneIdSet.has(filteredSubChats[globalIndex + 1]?.id)
                           const isFocused =
                             focusedChatIndex === globalIndex &&
                             focusedChatIndex >= 0
@@ -1307,6 +1363,10 @@ export function AgentsSubChatsSidebar({
                                         : isFocused
                                           ? "bg-foreground/5 text-foreground"
                                           : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+                                    isSplitTab && !isMultiSelectMode && "border border-border/60",
+                                    isSplitTab && !isMultiSelectMode && !isActive && !isChecked && !isFocused && "bg-muted/40 hover:bg-muted/50",
+                                    isSplitTab && !isMultiSelectMode && hasSplitPrev && "-mt-px rounded-t-none",
+                                    isSplitTab && !isMultiSelectMode && hasSplitNext && "rounded-b-none",
                                   )}
                                 >
                                   <div className="flex items-start gap-2.5">
@@ -1477,6 +1537,12 @@ export function AgentsSubChatsSidebar({
                                   currentIndex={globalIndex}
                                   totalCount={filteredSubChats.length}
                                   chatId={parentChatId}
+                                  onOpenInSplit={addToSplit}
+                                  onCloseSplit={closeSplit}
+                                  onRemoveFromSplit={removeFromSplit}
+                                  splitPaneCount={splitPaneIds.length}
+                                  isActiveTab={isActive}
+                                  isSplitTab={isSplitTab}
                                 />
                               )}
                             </ContextMenu>
@@ -1500,15 +1566,23 @@ export function AgentsSubChatsSidebar({
                         </h3>
                       </div>
                       <div className="list-none p-0 m-0">
-                        {unpinnedChats.map((subChat, index) => {
+                        {unpinnedChats.map((subChat) => {
                           const isSubChatLoading = loadingChatIds.has(
                             subChat.id,
                           )
                           const isActive = activeSubChatId === subChat.id
                           const isPinned = pinnedSubChatIds.includes(subChat.id)
-                          const globalIndex = filteredSubChats.findIndex(
-                            (c) => c.id === subChat.id,
-                          )
+                          const globalIndex = filteredIndexById.get(subChat.id) ?? -1
+                          const isSplitTab = splitPaneIdSet.has(subChat.id)
+                          const hasSplitPrev =
+                            isSplitTab &&
+                            globalIndex > 0 &&
+                            splitPaneIdSet.has(filteredSubChats[globalIndex - 1]?.id)
+                          const hasSplitNext =
+                            isSplitTab &&
+                            globalIndex >= 0 &&
+                            globalIndex < filteredSubChats.length - 1 &&
+                            splitPaneIdSet.has(filteredSubChats[globalIndex + 1]?.id)
                           const isFocused =
                             focusedChatIndex === globalIndex &&
                             focusedChatIndex >= 0
@@ -1593,6 +1667,10 @@ export function AgentsSubChatsSidebar({
                                         : isFocused
                                           ? "bg-foreground/5 text-foreground"
                                           : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+                                    isSplitTab && !isMultiSelectMode && "border border-border/60",
+                                    isSplitTab && !isMultiSelectMode && !isActive && !isChecked && !isFocused && "bg-muted/40 hover:bg-muted/50",
+                                    isSplitTab && !isMultiSelectMode && hasSplitPrev && "-mt-px rounded-t-none",
+                                    isSplitTab && !isMultiSelectMode && hasSplitNext && "rounded-b-none",
                                   )}
                                 >
                                   <div className="flex items-start gap-2.5">
@@ -1763,6 +1841,12 @@ export function AgentsSubChatsSidebar({
                                   currentIndex={globalIndex}
                                   totalCount={filteredSubChats.length}
                                   chatId={parentChatId}
+                                  onOpenInSplit={addToSplit}
+                                  onCloseSplit={closeSplit}
+                                  onRemoveFromSplit={removeFromSplit}
+                                  splitPaneCount={splitPaneIds.length}
+                                  isActiveTab={isActive}
+                                  isSplitTab={isSplitTab}
                                 />
                               )}
                             </ContextMenu>

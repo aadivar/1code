@@ -1800,6 +1800,7 @@ export function AgentsSidebar({
   // Prefetch individual chat data on hover
   const prefetchRemoteChat = usePrefetchRemoteChat()
   const prefetchLocalChat = usePrefetchLocalChat()
+  const ENABLE_CHAT_HOVER_PREFETCH = false
 
   // Merge local and remote chats into unified list
   const agentChats = useMemo(() => {
@@ -2841,13 +2842,15 @@ export function AgentsSidebar({
       // Update hovered index ref
       hoveredChatIndexRef.current = globalIndex
 
-      // Prefetch chat data on hover for instant load on click
-      const chat = agentChats?.find((c) => c.id === chatId)
-      if (chat?.isRemote) {
-        const originalId = chatId.replace(/^remote_/, '')
-        prefetchRemoteChat(originalId)
-      } else {
-        prefetchLocalChat(chatId)
+      // Prefetch chat data on hover for instant load on click (currently disabled to reduce memory pressure)
+      if (ENABLE_CHAT_HOVER_PREFETCH) {
+        const chat = agentChats?.find((c) => c.id === chatId)
+        if (chat?.isRemote) {
+          const originalId = chatId.replace(/^remote_/, '')
+          prefetchRemoteChat(originalId)
+        } else {
+          prefetchLocalChat(chatId)
+        }
       }
 
       // Clear any existing timer
@@ -2874,7 +2877,7 @@ export function AgentsSidebar({
         tooltip.textContent = name || ""
       }, 1000)
     },
-    [agentChats, prefetchRemoteChat, prefetchLocalChat],
+    [agentChats, prefetchRemoteChat, prefetchLocalChat, ENABLE_CHAT_HOVER_PREFETCH],
   )
 
   const handleAgentMouseLeave = useCallback(() => {

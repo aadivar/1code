@@ -4,6 +4,7 @@
  */
 
 import { useMemo } from "react"
+import { normalizeCodexToolPart } from "../../shared/codex-tool-normalizer"
 import { trpc, trpcClient } from "./trpc"
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -28,7 +29,12 @@ export const api = {
         const chatId = args?.chatId
         const result = trpc.chats.get.useQuery(
           { id: chatId! },
-          { enabled: !!chatId && opts?.enabled !== false },
+          {
+            ...(opts ?? {}),
+            enabled: !!chatId && opts?.enabled !== false,
+            staleTime: opts?.staleTime ?? 0,
+            gcTime: opts?.gcTime ?? 30_000,
+          },
         )
 
         // Memoize transformation to prevent infinite re-renders
@@ -59,6 +65,34 @@ export const api = {
                           input: part.input || part.args,
                         }
                       }
+                      // Normalize Codex MCP wrapper shape (e.g. tool-Tool: notion/notion-search)
+                      // to canonical tool-mcp__{server}__{tool} so MCP renderer can parse it.
+                      if (
+                        part.type?.startsWith("tool-Tool:") ||
+                        part.toolName?.startsWith("Tool:") ||
+                        part.input?.toolName?.startsWith("Tool:")
+                      ) {
+                        const normalizedMcpPart = normalizeCodexToolPart(part) as AnyObj
+                        if (normalizedMcpPart !== part) {
+                          if (normalizedMcpPart.state) {
+                            let normalizedState = normalizedMcpPart.state
+                            if (normalizedMcpPart.state === "result") {
+                              normalizedState =
+                                normalizedMcpPart.result?.success === false
+                                  ? "output-error"
+                                  : "output-available"
+                            }
+                            return {
+                              ...normalizedMcpPart,
+                              state: normalizedState,
+                              output:
+                                normalizedMcpPart.output ||
+                                normalizedMcpPart.result,
+                            }
+                          }
+                          return normalizedMcpPart
+                        }
+                      }
                       // Normalize ACP/codex tool types (e.g. "tool-Read README.md" → "tool-Read")
                       // Detects ACP parts by: title-based type with space, or proxy tool name, or input.toolName present
                       if (part.type?.startsWith("tool-") && (part.input?.toolName || part.type.includes(" ") || part.type === "tool-acp.acp_provider_agent_dynamic_tool")) {
@@ -67,8 +101,24 @@ export const api = {
                           Grep: "Grep", Glob: "Glob", Edit: "Edit", Write: "Write",
                           Thought: "Thinking", Fetch: "WebFetch",
                         }
-                        const title: string = part.input?.toolName || part.type.slice(5)
-                        const args: AnyObj = part.input?.args ?? {}
+                        let parsedInput: AnyObj = {}
+                        if (part.input && typeof part.input === "object") {
+                          parsedInput = part.input as AnyObj
+                        } else if (typeof part.input === "string") {
+                          try {
+                            const parsed = JSON.parse(part.input)
+                            if (parsed && typeof parsed === "object") {
+                              parsedInput = parsed as AnyObj
+                            }
+                          } catch {
+                            parsedInput = {}
+                          }
+                        }
+                        const title: string = parsedInput.toolName || part.type.slice(5)
+                        const args: AnyObj =
+                          parsedInput.args && typeof parsedInput.args === "object"
+                            ? parsedInput.args
+                            : parsedInput
                         const spaceIdx = title.indexOf(" ")
                         const verb = spaceIdx === -1 ? title : title.slice(0, spaceIdx)
                         const detail = spaceIdx === -1 ? "" : title.slice(spaceIdx + 1)

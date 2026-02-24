@@ -3,6 +3,7 @@
 import { useAtomValue } from "jotai"
 import { ListTree, MoreHorizontal } from "lucide-react"
 import { memo, useCallback, useContext, useMemo, useState } from "react"
+import { normalizeCodexToolPart } from "../../../../shared/codex-tool-normalizer"
 
 import {
   DropdownMenu,
@@ -32,7 +33,11 @@ import { AgentThinkingTool } from "../ui/agent-thinking-tool"
 import { AgentTodoTool } from "../ui/agent-todo-tool"
 import { AgentMcpToolCall } from "../ui/agent-mcp-tool-call"
 import { AgentToolCall } from "../ui/agent-tool-call"
-import { AgentToolRegistry, getToolStatus, parseMcpToolType } from "../ui/agent-tool-registry"
+import {
+  AgentToolRegistry,
+  getToolStatus,
+  parseMcpToolType,
+} from "../ui/agent-tool-registry"
 import { AgentWebFetchTool } from "../ui/agent-web-fetch-tool"
 import { AgentWebSearchCollapsible } from "../ui/agent-web-search-collapsible"
 import {
@@ -90,6 +95,11 @@ function normalizeAcpParts(parts: any[]): any[] {
     const isAcpPart = part.input?.toolName || part.type.includes(" ") || part.type === "tool-acp.acp_provider_agent_dynamic_tool"
     if (!isAcpPart) return part
 
+    const partInput =
+      part.input && typeof part.input === "object"
+        ? (part.input as Record<string, any>)
+        : {}
+
     // Determine the ACP title — either from the type itself or from input.toolName
     let title: string | null = null
     let args: Record<string, any> = {}
@@ -97,8 +107,11 @@ function normalizeAcpParts(parts: any[]): any[] {
     // Case 1: type is already the title-based type (e.g. "tool-Read README.md")
     const verb = getAcpVerb(part.type)
     if (verb) {
-      title = part.input?.toolName || part.type.slice(5)
-      args = part.input?.args ?? {}
+      title = partInput.toolName || part.type.slice(5)
+      args =
+        partInput.args && typeof partInput.args === "object"
+          ? (partInput.args as Record<string, any>)
+          : partInput
     }
 
     // Case 2: type is the ACP proxy tool name
@@ -107,9 +120,16 @@ function normalizeAcpParts(parts: any[]): any[] {
       if (typeof input === "string") {
         try { input = JSON.parse(input) } catch { return part }
       }
-      if (input?.toolName) {
-        title = input.toolName
-        args = input.args ?? {}
+      const parsedInput =
+        input && typeof input === "object"
+          ? (input as Record<string, any>)
+          : {}
+      if (parsedInput.toolName) {
+        title = parsedInput.toolName
+        args =
+          parsedInput.args && typeof parsedInput.args === "object"
+            ? (parsedInput.args as Record<string, any>)
+            : parsedInput
       }
     }
 
@@ -347,7 +367,8 @@ export interface AssistantMessageItemProps {
   sandboxSetupStatus?: "cloning" | "ready" | "error"
 }
 
-// Cache for tracking previous message state per message (to detect AI SDK in-place mutations)
+// Cache for tracking previous message state per sub-chat/message
+// (to detect AI SDK in-place mutations without cross-chat collisions)
 // Stores both text lengths and tool states for complete change detection
 interface MessageStateSnapshot {
   textLengths: number[]
@@ -355,6 +376,12 @@ interface MessageStateSnapshot {
   lastPartInputJson: string | undefined
 }
 const messageStateCache = new Map<string, MessageStateSnapshot>()
+
+export function clearMessageStateCacheByMessageIds(subChatId: string, messageIds: string[]) {
+  for (const id of messageIds) {
+    messageStateCache.delete(`${subChatId}:${id}`)
+  }
+}
 
 function getTrackedPartTextLength(part: any): number {
   if (part?.type === "text") {
@@ -383,6 +410,7 @@ function areMessagePropsEqual(
   next: AssistantMessageItemProps
 ): boolean {
   const msgId = next.message?.id
+  const cacheKey = msgId ? `${next.subChatId}:${msgId}` : null
 
   // Different message ID = different message
   if (prev.message?.id !== next.message?.id) {
@@ -411,38 +439,38 @@ function areMessagePropsEqual(
   }
 
   // Get cached state from previous render
-  const cachedState = msgId ? messageStateCache.get(msgId) : undefined
+  const cachedState = cacheKey ? messageStateCache.get(cacheKey) : undefined
 
   // If no cache, this is first comparison - cache and allow render
   if (!cachedState) {
-    if (msgId) messageStateCache.set(msgId, currentState)
+    if (cacheKey) messageStateCache.set(cacheKey, currentState)
     return false  // First render - must render
   }
 
   // Compare parts count
   if (cachedState.textLengths.length !== currentState.textLengths.length) {
-    messageStateCache.set(msgId!, currentState)
+    messageStateCache.set(cacheKey!, currentState)
     return false  // Parts count changed
   }
 
   // Compare text lengths (detects streaming text changes!)
   for (let i = 0; i < currentState.textLengths.length; i++) {
     if (cachedState.textLengths[i] !== currentState.textLengths[i]) {
-      messageStateCache.set(msgId!, currentState)
+      messageStateCache.set(cacheKey!, currentState)
       return false  // Text length changed = content changed
     }
   }
 
   // Compare last part's input (detects tool input streaming!)
   if (cachedState.lastPartInputJson !== currentState.lastPartInputJson) {
-    messageStateCache.set(msgId!, currentState)
+    messageStateCache.set(cacheKey!, currentState)
     return false  // Tool input changed
   }
 
   // Compare ALL part states (detects Edit plan file streaming!)
   for (let i = 0; i < currentState.partStates.length; i++) {
     if (cachedState.partStates[i] !== currentState.partStates[i]) {
-      messageStateCache.set(msgId!, currentState)
+      messageStateCache.set(cacheKey!, currentState)
       return false  // Part state changed
     }
   }
@@ -470,7 +498,9 @@ export const AssistantMessageItem = memo(function AssistantMessageItem({
   // Normalize ACP/codex tool parts into canonical types (e.g. "tool-Read README.md" → "tool-Read").
   // Note: no useMemo — AI SDK mutates parts in-place, so the array reference
   // doesn't change and useMemo would return stale results.
-  const messageParts = normalizeAcpParts(message?.parts || [])
+  const messageParts = normalizeAcpParts(
+    (message?.parts || []).map((part) => normalizeCodexToolPart(part) as any),
+  )
 
   const contentParts = useMemo(() =>
     messageParts.filter((p: any) => p.type !== "step-start"),

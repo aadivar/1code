@@ -227,7 +227,7 @@ const TreeNode = memo(function TreeNode({
             onMouseDown={handleMouseDown}
             onClick={handleClick}
             className={cn(
-              "flex items-center h-[22px] w-full cursor-pointer select-none transition-colors",
+              "flex items-center h-[22px] w-full cursor-pointer select-none",
               isFocused
                 ? "bg-accent text-accent-foreground"
                 : isActive

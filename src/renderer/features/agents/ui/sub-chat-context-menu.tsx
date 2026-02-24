@@ -55,6 +55,18 @@ interface SubChatContextMenuProps {
   canCloseOtherTabs?: boolean
   /** Parent chat ID for export functionality */
   chatId?: string | null
+  /** Open this sub-chat in split view */
+  onOpenInSplit?: (subChatId: string) => void
+  /** Close the current split view */
+  onCloseSplit?: () => void
+  /** Whether this tab is currently selected for command/input focus */
+  isActiveTab?: boolean
+  /** Whether this tab is already in split panes */
+  isSplitTab?: boolean
+  /** Remove this specific pane from split */
+  onRemoveFromSplit?: (subChatId: string) => void
+  /** Number of panes currently in split */
+  splitPaneCount?: number
 }
 
 export function SubChatContextMenu({
@@ -76,6 +88,12 @@ export function SubChatContextMenu({
   hasTabsToRight = false,
   canCloseOtherTabs = false,
   chatId,
+  onOpenInSplit,
+  onCloseSplit,
+  isActiveTab = false,
+  isSplitTab = false,
+  onRemoveFromSplit,
+  splitPaneCount = 0,
 }: SubChatContextMenuProps) {
   const closeTabShortcut = useCloseTabShortcut()
 
@@ -128,6 +146,27 @@ export function SubChatContextMenu({
           Open in new window
         </ContextMenuItem>
       )}
+      {isSplitTab ? (
+        <>
+          {splitPaneCount > 2 && onRemoveFromSplit && (
+            <ContextMenuItem onClick={() => onRemoveFromSplit(subChat.id)}>
+              Remove from split
+            </ContextMenuItem>
+          )}
+          {onCloseSplit && (
+            <ContextMenuItem onClick={onCloseSplit}>
+              Separate chats
+            </ContextMenuItem>
+          )}
+        </>
+      ) : onOpenInSplit ? (
+        <ContextMenuItem
+          onClick={() => onOpenInSplit(subChat.id)}
+          disabled={isActiveTab || isOnlyChat || splitPaneCount >= 4}
+        >
+          Add as split
+        </ContextMenuItem>
+      ) : null}
       <ContextMenuSeparator />
 
       {showCloseTabOptions ? (

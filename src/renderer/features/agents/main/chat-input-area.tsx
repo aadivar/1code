@@ -58,6 +58,9 @@ import {
   lastSelectedCodexModelIdAtom,
   lastSelectedCodexThinkingAtom,
   lastSelectedModelIdAtom,
+  subChatCodexModelIdAtomFamily,
+  subChatCodexThinkingAtomFamily,
+  subChatModelIdAtomFamily,
   subChatModeAtomFamily,
   getNextMode,
   type AgentMode,
@@ -329,6 +332,7 @@ function arePropsEqual(prevProps: ChatInputAreaProps, nextProps: ChatInputAreaPr
   if (
     prevProps.messageTokenData.totalInputTokens !== nextProps.messageTokenData.totalInputTokens ||
     prevProps.messageTokenData.totalOutputTokens !== nextProps.messageTokenData.totalOutputTokens ||
+    prevProps.messageTokenData.contextWindow !== nextProps.messageTokenData.contextWindow ||
     prevProps.messageTokenData.messageCount !== nextProps.messageTokenData.messageCount
   ) {
     return false
@@ -447,26 +451,53 @@ export const ChatInputArea = memo(function ChatInputArea({
 
   // Model dropdown state
   const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false)
-  const [lastSelectedModelId, setLastSelectedModelId] = useAtom(lastSelectedModelIdAtom)
-  const [lastSelectedCodexModelId, setLastSelectedCodexModelId] = useAtom(
-    lastSelectedCodexModelIdAtom,
+  const subChatModelIdAtom = useMemo(
+    () => subChatModelIdAtomFamily(subChatId),
+    [subChatId],
   )
-  const [lastSelectedCodexThinking, setLastSelectedCodexThinking] = useAtom(
-    lastSelectedCodexThinkingAtom,
+  const [selectedSubChatModelId, setSelectedSubChatModelId] = useAtom(
+    subChatModelIdAtom,
   )
+  const subChatCodexModelIdAtom = useMemo(
+    () => subChatCodexModelIdAtomFamily(subChatId),
+    [subChatId],
+  )
+  const [selectedSubChatCodexModelId, setSelectedSubChatCodexModelId] = useAtom(
+    subChatCodexModelIdAtom,
+  )
+  const subChatCodexThinkingAtom = useMemo(
+    () => subChatCodexThinkingAtomFamily(subChatId),
+    [subChatId],
+  )
+  const [selectedSubChatCodexThinking, setSelectedSubChatCodexThinking] = useAtom(
+    subChatCodexThinkingAtom,
+  )
+  const setLastSelectedModelId = useSetAtom(lastSelectedModelIdAtom)
+  const setLastSelectedCodexModelId = useSetAtom(lastSelectedCodexModelIdAtom)
+  const setLastSelectedCodexThinking = useSetAtom(lastSelectedCodexThinkingAtom)
   const [selectedOllamaModel, setSelectedOllamaModel] = useAtom(selectedOllamaModelAtom)
   const availableModels = useAvailableModels()
   const [selectedModel, setSelectedModel] = useState(
-    () => availableModels.models.find((m) => m.id === lastSelectedModelId) || availableModels.models[0],
+    () =>
+      availableModels.models.find((m) => m.id === selectedSubChatModelId) ||
+      availableModels.models[0],
   )
 
-  // Sync selectedModel when atom value changes (e.g., after localStorage hydration)
+  // Sync selectedModel when per-subChat atom value changes (e.g., after localStorage hydration)
   useEffect(() => {
-    const model = availableModels.models.find((m) => m.id === lastSelectedModelId)
+    const model = availableModels.models.find((m) => m.id === selectedSubChatModelId)
     if (model && model.id !== selectedModel.id) {
       setSelectedModel(model)
     }
-  }, [lastSelectedModelId])
+  }, [availableModels.models, selectedModel.id, selectedSubChatModelId])
+
+  // Materialize the resolved Claude model into per-subChat storage once mounted.
+  // This prevents later global default changes from affecting existing sub-chats.
+  useEffect(() => {
+    if (provider !== "claude-code") return
+    if (!selectedModel?.id) return
+    setSelectedSubChatModelId(selectedModel.id)
+  }, [provider, selectedModel?.id, setSelectedSubChatModelId])
 
   const storedCodexApiKey = useAtomValue(codexApiKeyAtom)
   const hasAppCodexApiKey = Boolean(normalizeCodexApiKey(storedCodexApiKey))
@@ -489,19 +520,19 @@ export const ChatInputArea = memo(function ChatInputArea({
   )
   const selectedCodexModel = useMemo(
     () =>
-      codexUiModels.find((model) => model.id === lastSelectedCodexModelId) ||
+      codexUiModels.find((model) => model.id === selectedSubChatCodexModelId) ||
       codexUiModels[0] ||
       CODEX_MODELS[0]!,
-    [codexUiModels, lastSelectedCodexModelId],
+    [codexUiModels, selectedSubChatCodexModelId],
   )
 
   const selectedCodexThinking = useMemo<CodexThinkingLevel>(() => {
     if (
       selectedCodexModel.thinkings.includes(
-        lastSelectedCodexThinking as CodexThinkingLevel,
+        selectedSubChatCodexThinking as CodexThinkingLevel,
       )
     ) {
-      return lastSelectedCodexThinking as CodexThinkingLevel
+      return selectedSubChatCodexThinking as CodexThinkingLevel
     }
 
     if (selectedCodexModel.thinkings.includes("high")) {
@@ -509,23 +540,39 @@ export const ChatInputArea = memo(function ChatInputArea({
     }
 
     return selectedCodexModel.thinkings[0]!
-  }, [selectedCodexModel, lastSelectedCodexThinking])
+  }, [selectedCodexModel, selectedSubChatCodexThinking])
 
   useEffect(() => {
     if (
       selectedCodexModel.thinkings.includes(
-        lastSelectedCodexThinking as CodexThinkingLevel,
+        selectedSubChatCodexThinking as CodexThinkingLevel,
       )
     ) {
       return
     }
 
-    setLastSelectedCodexThinking(selectedCodexThinking)
+    setSelectedSubChatCodexThinking(selectedCodexThinking)
   }, [
     selectedCodexModel,
-    lastSelectedCodexThinking,
+    selectedSubChatCodexThinking,
     selectedCodexThinking,
-    setLastSelectedCodexThinking,
+    setSelectedSubChatCodexThinking,
+  ])
+
+  // Materialize resolved Codex model/thinking into per-subChat storage once mounted.
+  // This prevents later global default changes from affecting existing sub-chats.
+  useEffect(() => {
+    if (provider !== "codex") return
+    if (selectedCodexModel?.id) {
+      setSelectedSubChatCodexModelId(selectedCodexModel.id)
+    }
+    setSelectedSubChatCodexThinking(selectedCodexThinking)
+  }, [
+    provider,
+    selectedCodexModel?.id,
+    selectedCodexThinking,
+    setSelectedSubChatCodexModelId,
+    setSelectedSubChatCodexThinking,
   ])
 
   const customClaudeConfig = useAtomValue(customClaudeConfigAtom)
@@ -1522,6 +1569,7 @@ export const ChatInputArea = memo(function ChatInputArea({
                             availableModels.models[0]
                           if (!model) return
                           setSelectedModel(model)
+                          setSelectedSubChatModelId(model.id)
                           setLastSelectedModelId(model.id)
                         },
                         hasCustomModelConfig: hasCustomClaudeConfig,
@@ -1541,18 +1589,23 @@ export const ChatInputArea = memo(function ChatInputArea({
                           const model = codexUiModels.find((item) => item.id === modelId)
                           if (!model) return
                           const nextThinking = model.thinkings.includes(
-                            lastSelectedCodexThinking as CodexThinkingLevel,
+                            selectedSubChatCodexThinking as CodexThinkingLevel,
                           )
-                            ? (lastSelectedCodexThinking as CodexThinkingLevel)
+                            ? (selectedSubChatCodexThinking as CodexThinkingLevel)
                             : (model.thinkings.includes("high")
                               ? "high"
                               : model.thinkings[0]!)
 
+                          setSelectedSubChatCodexModelId(model.id)
+                          setSelectedSubChatCodexThinking(nextThinking)
                           setLastSelectedCodexModelId(model.id)
                           setLastSelectedCodexThinking(nextThinking)
                         },
                         selectedThinking: selectedCodexThinking,
-                        onSelectThinking: setLastSelectedCodexThinking,
+                        onSelectThinking: (thinking) => {
+                          setSelectedSubChatCodexThinking(thinking)
+                          setLastSelectedCodexThinking(thinking)
+                        },
                         isConnected: codexOnboardingCompleted,
                       }}
                     />

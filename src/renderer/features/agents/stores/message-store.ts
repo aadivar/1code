@@ -2,6 +2,7 @@
 
 import { atom } from "jotai"
 import { atomFamily } from "jotai/utils"
+import { appStore } from "../../../lib/jotai-store"
 
 // Types
 export interface MessagePart {
@@ -43,8 +44,13 @@ export interface Message {
 // ============================================================================
 
 // Per-message atom family - each message has its own INDEPENDENT atom
-// This is the key optimization: updating one message doesn't affect others
-export const messageAtomFamily = atomFamily((_messageId: string) =>
+// Key format: "<subChatId>:::<messageId>".
+// This guarantees full per-chat isolation even when message IDs overlap across chats.
+export const getPerChatMessageKey = (subChatId: string, messageId: string) =>
+  `${subChatId}:::${messageId}`
+
+// This is the key optimization: updating one message doesn't affect others.
+export const messageAtomFamily = atomFamily((_messageKey: string) =>
   atom<Message | null>(null)
 )
 
@@ -57,6 +63,15 @@ export const messageIdsAtom = atom<string[]>([])
 // Message roles cache - updated only when messages are added/removed
 // This avoids reading all message atoms just to check roles
 const messageRolesAtom = atom<Map<string, "user" | "assistant" | "system">>(new Map())
+
+// Per-subChat atoms for split-pane rendering. Each pane reads only its own IDs/roles.
+export const messageIdsPerChatAtom = atomFamily((_subChatId: string) =>
+  atom<string[]>([])
+)
+
+const messageRolesPerChatAtom = atomFamily((_subChatId: string) =>
+  atom<Map<string, "user" | "assistant" | "system">>(new Map())
+)
 
 // Currently streaming message ID (null if not streaming)
 export const streamingMessageIdAtom = atom<string | null>(null)
@@ -85,6 +100,18 @@ export const isLastMessageAtomFamily = atomFamily((messageId: string) =>
   atom((get) => get(lastMessageIdAtom) === messageId)
 )
 
+// Per-subchat version for split panes.
+// Key format: "subChatId:messageId"
+export const isLastMessagePerChatAtomFamily = atomFamily((key: string) => {
+  const sepIdx = key.indexOf(":")
+  const subChatId = key.slice(0, sepIdx)
+  const messageId = key.slice(sepIdx + 1)
+  return atom((get) => {
+    const ids = get(messageIdsPerChatAtom(subChatId))
+    return ids.length > 0 && ids[ids.length - 1] === messageId
+  })
+})
+
 // Check if a specific message is currently streaming
 export const isMessageStreamingAtomFamily = atomFamily((messageId: string) =>
   atom((get) => {
@@ -109,12 +136,15 @@ export const isMessageStreamingAtomFamily = atomFamily((messageId: string) =>
 const textPartCache = new Map<string, string>()
 
 export const textPartAtomFamily = atomFamily((key: string) => {
-  // Key format: "messageId:partIndex"
-  const [messageId, partIndexStr] = key.split(":")
+  // Key format: "<messageKey>:<partIndex>".
+  // messageKey can include ":" so split from the end.
+  const sepIdx = key.lastIndexOf(":")
+  const messageKey = key.slice(0, sepIdx)
+  const partIndexStr = key.slice(sepIdx + 1)
   const partIndex = parseInt(partIndexStr!, 10)
 
   return atom((get) => {
-    const message = get(messageAtomFamily(messageId!))
+    const message = get(messageAtomFamily(messageKey))
     const parts = message?.parts || []
     const part = parts[partIndex]
     const text = part?.type === "text" ? (part.text || "") : ""
@@ -166,9 +196,9 @@ interface MessageStructure {
 // Cache for message structure
 const messageStructureCache = new Map<string, MessageStructure>()
 
-export const messageStructureAtomFamily = atomFamily((messageId: string) =>
+export const messageStructureAtomFamily = atomFamily((messageKey: string) =>
   atom((get) => {
-    const message = get(messageAtomFamily(messageId))
+    const message = get(messageAtomFamily(messageKey))
     if (!message) return null
 
     // Build structure without text content
@@ -196,7 +226,7 @@ export const messageStructureAtomFamily = atomFamily((messageId: string) =>
     }
 
     // Check if structure changed
-    const cached = messageStructureCache.get(messageId)
+    const cached = messageStructureCache.get(messageKey)
     if (cached) {
       // Compare structures
       if (
@@ -223,7 +253,7 @@ export const messageStructureAtomFamily = atomFamily((messageId: string) =>
       }
     }
 
-    messageStructureCache.set(messageId, newStructure)
+    messageStructureCache.set(messageKey, newStructure)
     return newStructure
   })
 )
@@ -254,6 +284,28 @@ export const userMessageIdsAtom = atom((get) => {
   userMessageIdsCacheByChat.set(subChatId, newUserIds)
   return newUserIds
 })
+
+// Per-subchat version for split panes
+const userMessageIdsPerChatCache = new Map<string, string[]>()
+export const userMessageIdsPerChatAtom = atomFamily((subChatId: string) =>
+  atom((get) => {
+    const ids = get(messageIdsPerChatAtom(subChatId))
+    const roles = get(messageRolesPerChatAtom(subChatId))
+    const newUserIds = ids.filter((id) => roles.get(id) === "user")
+
+    const cached = userMessageIdsPerChatCache.get(subChatId)
+    if (
+      cached &&
+      newUserIds.length === cached.length &&
+      newUserIds.every((id, i) => id === cached[i])
+    ) {
+      return cached
+    }
+
+    userMessageIdsPerChatCache.set(subChatId, newUserIds)
+    return newUserIds
+  })
+)
 
 // ============================================================================
 // MESSAGE GROUPS - For rendering structure
@@ -313,9 +365,98 @@ export const messageGroupsAtom = atom((get) => {
   return groups
 })
 
+// Per-subchat message groups for split panes
+function buildMessageGroups(ids: string[], roles: Map<string, string>): MessageGroupType[] {
+  const groups: MessageGroupType[] = []
+  let currentGroup: MessageGroupType | null = null
+
+  for (const id of ids) {
+    const role = roles.get(id)
+    if (!role) continue
+
+    if (role === "user") {
+      if (currentGroup) groups.push(currentGroup)
+      currentGroup = { userMsgId: id, assistantMsgIds: [] }
+    } else if (currentGroup && role === "assistant") {
+      currentGroup.assistantMsgIds.push(id)
+    }
+  }
+
+  if (currentGroup) groups.push(currentGroup)
+  return groups
+}
+
+const messageGroupsPerChatCache = new Map<string, MessageGroupType[]>()
+const messageGroupsPerChatAtom = atomFamily((subChatId: string) =>
+  atom((get) => {
+    const ids = get(messageIdsPerChatAtom(subChatId))
+    const roles = get(messageRolesPerChatAtom(subChatId))
+    const groups = buildMessageGroups(ids, roles as Map<string, string>)
+
+    const cached = messageGroupsPerChatCache.get(subChatId) ?? []
+    if (groups.length === cached.length) {
+      let allMatch = true
+      for (let i = 0; i < groups.length; i++) {
+        const newGroup = groups[i]
+        const cachedGroup = cached[i]
+        if (
+          newGroup?.userMsgId !== cachedGroup?.userMsgId ||
+          newGroup?.assistantMsgIds.length !== cachedGroup?.assistantMsgIds.length ||
+          !newGroup?.assistantMsgIds.every((id, j) => id === cachedGroup?.assistantMsgIds[j])
+        ) {
+          allMatch = false
+          break
+        }
+      }
+      if (allMatch) {
+        return cached
+      }
+    }
+
+    messageGroupsPerChatCache.set(subChatId, groups)
+    return groups
+  })
+)
+
 // ============================================================================
 // ASSISTANT IDS FOR USER MESSAGE - For IsolatedMessageGroup
 // ============================================================================
+
+// Per-subchat versions for split panes
+// Key format: "subChatId:userMsgId"
+const assistantIdsPerChatCache = new Map<string, string[]>()
+export const assistantIdsPerChatAtomFamily = atomFamily((key: string) => {
+  const sepIdx = key.indexOf(":")
+  const subChatId = key.slice(0, sepIdx)
+  const userMsgId = key.slice(sepIdx + 1)
+  return atom((get) => {
+    const groups = get(messageGroupsPerChatAtom(subChatId))
+    const group = groups.find((g) => g.userMsgId === userMsgId)
+    const newIds = group?.assistantMsgIds ?? []
+    const cached = assistantIdsPerChatCache.get(key)
+
+    if (
+      cached &&
+      cached.length === newIds.length &&
+      cached.every((id, i) => id === newIds[i])
+    ) {
+      return cached
+    }
+
+    assistantIdsPerChatCache.set(key, newIds)
+    return newIds
+  })
+})
+
+export const isLastUserMessagePerChatAtomFamily = atomFamily((key: string) => {
+  const sepIdx = key.indexOf(":")
+  const subChatId = key.slice(0, sepIdx)
+  const userMsgId = key.slice(sepIdx + 1)
+  return atom((get) => {
+    const userIds = get(userMessageIdsPerChatAtom(subChatId))
+    return userIds[userIds.length - 1] === userMsgId
+  })
+})
 
 // Key format: "subChatId:userMsgId" to isolate per chat
 const assistantIdsCacheByChat = new Map<string, string[]>()
@@ -404,6 +545,35 @@ export function findRollbackTargetSdkUuidForUserIndex(
   return typeof sdkUuid === "string" && sdkUuid.length > 0 ? sdkUuid : null
 }
 
+// Per-subchat rollback target for split panes.
+// Key format: "subChatId:userMsgId"
+export const rollbackTargetPerChatAtomFamily = atomFamily((key: string) => {
+  const sepIdx = key.indexOf(":")
+  const subChatId = key.slice(0, sepIdx)
+  const userMsgId = key.slice(sepIdx + 1)
+  return atom((get) => {
+    const ids = get(messageIdsPerChatAtom(subChatId))
+    const roles = get(messageRolesPerChatAtom(subChatId))
+    const userMsgIndex = ids.indexOf(userMsgId)
+
+    if (userMsgIndex <= 0) return null
+
+    return findRollbackTargetSdkUuidForUserIndex(userMsgIndex, ids.length, (index) => {
+      const messageId = ids[index]
+      if (!messageId) return null
+
+      const role = roles.get(messageId)
+      if (!role) return null
+
+      if (role !== "assistant") {
+        return { role }
+      }
+
+      return get(messageAtomFamily(getPerChatMessageKey(subChatId, messageId)))
+    })
+  })
+})
+
 // SDK UUID of the assistant message that rollback should target for this user message.
 // Returns null when this turn cannot be rolled back.
 export const rollbackTargetSdkUuidForUserMsgAtomFamily = atomFamily((userMsgId: string) =>
@@ -425,7 +595,8 @@ export const rollbackTargetSdkUuidForUserMsgAtomFamily = atomFamily((userMsgId: 
         return { role }
       }
 
-      return get(messageAtomFamily(messageId))
+      const subChatId = get(currentSubChatIdAtom)
+      return get(messageAtomFamily(getPerChatMessageKey(subChatId, messageId)))
     })
   })
 )
@@ -477,7 +648,7 @@ export const lastAssistantMessageAtom = atom((get) => {
   // If same ID, return cached message
   if (lastAssistantId === cached?.id && cached.msg) {
     // But we need to get fresh message in case it changed during streaming
-    const freshMsg = get(messageAtomFamily(lastAssistantId))
+    const freshMsg = get(messageAtomFamily(getPerChatMessageKey(subChatId, lastAssistantId)))
     if (freshMsg === cached.msg) {
       return cached.msg
     }
@@ -486,7 +657,7 @@ export const lastAssistantMessageAtom = atom((get) => {
   }
 
   // Different ID, get fresh message
-  const msg = get(messageAtomFamily(lastAssistantId))
+  const msg = get(messageAtomFamily(getPerChatMessageKey(subChatId, lastAssistantId)))
   lastAssistantCacheByChat.set(subChatId, { id: lastAssistantId, msg })
   return msg
 })
@@ -533,7 +704,7 @@ export const messageTokenDataAtom = atom((get) => {
 
   // Get the last message to check if its tokens changed
   const lastId = ids[ids.length - 1]
-  const lastMsg = lastId ? get(messageAtomFamily(lastId)) : null
+  const lastMsg = lastId ? get(messageAtomFamily(getPerChatMessageKey(subChatId, lastId))) : null
   // Note: metadata has flat structure (metadata.outputTokens), not nested (metadata.usage.outputTokens)
   const lastMsgOutputTokens = (lastMsg?.metadata as any)?.outputTokens || 0
   const lastMsgParts = (lastMsg as any)?.parts as Array<{ type?: string; state?: string }> | undefined
@@ -557,7 +728,7 @@ export const messageTokenDataAtom = atom((get) => {
   // Recalculate token data (since last completed compact boundary)
   let startIndex = 0
   for (let i = 0; i < ids.length; i++) {
-    const msg = get(messageAtomFamily(ids[i]))
+    const msg = get(messageAtomFamily(getPerChatMessageKey(subChatId, ids[i]!)))
     const parts = (msg as any)?.parts as Array<{ type?: string; state?: string }> | undefined
     if (
       parts?.some(
@@ -577,7 +748,7 @@ export const messageTokenDataAtom = atom((get) => {
   let cacheWriteTokens = 0
   let reasoningTokens = 0
   for (let i = startIndex; i < ids.length; i++) {
-    const msg = get(messageAtomFamily(ids[i]))
+    const msg = get(messageAtomFamily(getPerChatMessageKey(subChatId, ids[i]!)))
     const metadata = msg?.metadata as any
     // Note: metadata has flat structure from transform.ts (metadata.inputTokens, metadata.outputTokens)
     // Extended fields like cacheReadInputTokens are not currently in MessageMetadata type
@@ -673,26 +844,28 @@ function hasMessageChanged(subChatId: string, msgId: string, msg: Message): bool
 
 export const syncMessagesWithStatusAtom = atom(
   null,
-  (get, set, payload: { messages: Message[]; status: string; subChatId?: string }) => {
-    const { messages, status, subChatId } = payload
+  (get, set, payload: { messages: Message[]; status: string; subChatId?: string; updateGlobal?: boolean }) => {
+    const { messages, status, subChatId, updateGlobal = true } = payload
 
-    // Update current subChatId if provided AND changed
-    // Avoid unnecessary set() calls - even though Jotai won't re-render for same primitive,
-    // this saves the overhead of the comparison check in subscribers
     const prevSubChatId = get(currentSubChatIdAtom)
-    if (subChatId && subChatId !== prevSubChatId) {
-      set(currentSubChatIdAtom, subChatId)
-    }
     const currentSubChatId = subChatId ?? prevSubChatId
+    let globalIdsChanged = false
+    let globalRolesChanged = false
 
-    // Update status only if changed
-    const prevStatus = get(chatStatusAtom)
-    if (status !== prevStatus) {
-      set(chatStatusAtom, status)
+    if (updateGlobal) {
+      // Update current subChatId if provided AND changed
+      // Avoid unnecessary set() calls - even though Jotai won't re-render for same primitive,
+      // this saves the overhead of the comparison check in subscribers
+      if (subChatId && subChatId !== prevSubChatId) {
+        set(currentSubChatIdAtom, subChatId)
+      }
+
+      // Update status only if changed
+      const prevStatus = get(chatStatusAtom)
+      if (status !== prevStatus) {
+        set(chatStatusAtom, status)
+      }
     }
-
-    const currentIds = get(messageIdsAtom)
-    const currentRoles = get(messageRolesAtom)
 
     // Build new IDs list and roles map
     const newIds = messages.map((m) => m.id)
@@ -702,28 +875,58 @@ export const syncMessagesWithStatusAtom = atom(
       newRoles.set(msg.id, msg.role)
     }
 
-    // Check if IDs changed (new message added or removed)
-    const idsChanged =
-      newIds.length !== currentIds.length ||
-      newIds.some((id, i) => id !== currentIds[i])
+    if (updateGlobal) {
+      const currentIds = get(messageIdsAtom)
+      const currentRoles = get(messageRolesAtom)
 
-    if (idsChanged) {
-      set(messageIdsAtom, newIds)
+      // Check if IDs changed (new message added or removed)
+      globalIdsChanged =
+        newIds.length !== currentIds.length ||
+        newIds.some((id, i) => id !== currentIds[i])
+
+      if (globalIdsChanged) {
+        set(messageIdsAtom, newIds)
+      }
+
+      // Check if roles changed
+      globalRolesChanged = newRoles.size !== currentRoles.size
+      if (!globalRolesChanged) {
+        for (const [id, role] of newRoles) {
+          if (currentRoles.get(id) !== role) {
+            globalRolesChanged = true
+            break
+          }
+        }
+      }
+
+      if (globalRolesChanged) {
+        set(messageRolesAtom, newRoles)
+      }
     }
 
-    // Check if roles changed
-    let rolesChanged = newRoles.size !== currentRoles.size
-    if (!rolesChanged) {
+    // Always update per-subchat atoms so split panes can render independently.
+    const perChatIds = get(messageIdsPerChatAtom(currentSubChatId))
+    const perChatIdsChanged =
+      newIds.length !== perChatIds.length ||
+      newIds.some((id, i) => id !== perChatIds[i])
+
+    if (perChatIdsChanged) {
+      set(messageIdsPerChatAtom(currentSubChatId), newIds)
+    }
+
+    const perChatRoles = get(messageRolesPerChatAtom(currentSubChatId))
+    let perChatRolesChanged = newRoles.size !== perChatRoles.size
+    if (!perChatRolesChanged) {
       for (const [id, role] of newRoles) {
-        if (currentRoles.get(id) !== role) {
-          rolesChanged = true
+        if (perChatRoles.get(id) !== role) {
+          perChatRolesChanged = true
           break
         }
       }
     }
 
-    if (rolesChanged) {
-      set(messageRolesAtom, newRoles)
+    if (perChatRolesChanged) {
+      set(messageRolesPerChatAtom(currentSubChatId), newRoles)
     }
 
     // Update individual message atoms ONLY if they changed
@@ -736,7 +939,8 @@ export const syncMessagesWithStatusAtom = atom(
     // 3. Individual part objects inside parts are mutated in-place
     const lastMessageId = newIds[newIds.length - 1] ?? null
     for (const msg of messages) {
-      const currentAtomValue = get(messageAtomFamily(msg.id))
+      const messageKey = getPerChatMessageKey(currentSubChatId, msg.id)
+      const currentAtomValue = get(messageAtomFamily(messageKey))
       const msgChanged = hasMessageChanged(currentSubChatId, msg.id, msg)
       const isLastMessage = msg.id === lastMessageId
 
@@ -749,33 +953,40 @@ export const syncMessagesWithStatusAtom = atom(
           ...msg,
           parts: msg.parts?.map((part: any) => ({ ...part, input: part.input ? { ...part.input } : undefined })),
         }
-        set(messageAtomFamily(msg.id), clonedMsg)
+        set(messageAtomFamily(messageKey), clonedMsg)
       }
     }
 
     // Cleanup removed message atoms to prevent memory leaks
     const newIdsSet = new Set(newIds)
     const previousIds = activeMessageIdsByChat.get(currentSubChatId) ?? new Set()
-
     for (const oldId of previousIds) {
       if (!newIdsSet.has(oldId)) {
         // Message was removed - cleanup its atom and caches
-        messageAtomFamily.remove(oldId)
+        messageAtomFamily.remove(getPerChatMessageKey(currentSubChatId, oldId))
         previousMessageState.delete(`${currentSubChatId}:${oldId}`)
         assistantIdsCacheByChat.delete(`${currentSubChatId}:${oldId}`)
+        assistantIdsPerChatCache.delete(`${currentSubChatId}:${oldId}`)
+        isLastMessagePerChatAtomFamily.remove(`${currentSubChatId}:${oldId}`)
+        assistantIdsPerChatAtomFamily.remove(`${currentSubChatId}:${oldId}`)
+        isLastUserMessagePerChatAtomFamily.remove(`${currentSubChatId}:${oldId}`)
+        rollbackTargetPerChatAtomFamily.remove(`${currentSubChatId}:${oldId}`)
       }
     }
 
     // Update active IDs tracking
     activeMessageIdsByChat.set(currentSubChatId, newIdsSet)
 
-    // Update streaming message ID
-    if (status === "streaming" || status === "submitted") {
-      const lastId = newIds[newIds.length - 1] ?? null
-      set(streamingMessageIdAtom, lastId)
-    } else {
-      set(streamingMessageIdAtom, null)
+    // Legacy global streaming state: update only for active pane.
+    if (updateGlobal) {
+      if (status === "streaming" || status === "submitted") {
+        const lastId = newIds[newIds.length - 1] ?? null
+        set(streamingMessageIdAtom, lastId)
+      } else {
+        set(streamingMessageIdAtom, null)
+      }
     }
+
   }
 )
 
@@ -792,23 +1003,66 @@ export const syncMessagesAtom = atom(
 // ============================================================================
 
 // Clear all caches for a specific subChat (call when unmounting/switching)
-export function clearSubChatCaches(subChatId: string) {
+export function clearSubChatCaches(subChatId: string): {
+  messageIds: string[]
+  toolCallIds: string[]
+} {
+  const clearedMessageIds: string[] = []
+  const clearedToolCallIds = new Set<string>()
+
   // Clear message atoms
   const activeIds = activeMessageIdsByChat.get(subChatId)
   if (activeIds) {
     for (const id of activeIds) {
-      messageAtomFamily.remove(id)
+      const messageKey = getPerChatMessageKey(subChatId, id)
+      const message = appStore.get(messageAtomFamily(messageKey))
+      clearedMessageIds.push(id)
+
+      for (const part of message?.parts || []) {
+        if (typeof part?.toolCallId === "string" && part.toolCallId.length > 0) {
+          clearedToolCallIds.add(part.toolCallId)
+        }
+      }
+
+      messageAtomFamily.remove(messageKey)
       previousMessageState.delete(`${subChatId}:${id}`)
       assistantIdsCacheByChat.delete(`${subChatId}:${id}`)
+      assistantIdsPerChatCache.delete(`${subChatId}:${id}`)
+      isLastMessagePerChatAtomFamily.remove(`${subChatId}:${id}`)
+      assistantIdsPerChatAtomFamily.remove(`${subChatId}:${id}`)
+      isLastUserMessagePerChatAtomFamily.remove(`${subChatId}:${id}`)
+      rollbackTargetPerChatAtomFamily.remove(`${subChatId}:${id}`)
+
+      messageStructureCache.delete(messageKey)
+      messageStructureAtomFamily.remove(messageKey)
+
+      const partPrefix = `${messageKey}:`
+      const textPartKeysToDelete: string[] = []
+      for (const key of textPartCache.keys()) {
+        if (key.startsWith(partPrefix)) {
+          textPartKeysToDelete.push(key)
+        }
+      }
+      for (const key of textPartKeysToDelete) {
+        textPartCache.delete(key)
+        textPartAtomFamily.remove(key)
+      }
     }
     activeMessageIdsByChat.delete(subChatId)
   }
 
   // Clear other caches
   userMessageIdsCacheByChat.delete(subChatId)
+  userMessageIdsPerChatCache.delete(subChatId)
   messageGroupsCacheByChat.delete(subChatId)
+  messageGroupsPerChatCache.delete(subChatId)
   lastAssistantCacheByChat.delete(subChatId)
   tokenDataCacheByChat.delete(subChatId)
+
+  return {
+    messageIds: clearedMessageIds,
+    toolCallIds: Array.from(clearedToolCallIds),
+  }
 }
 
 // Clear all caches (call on app reset/logout)
@@ -816,6 +1070,18 @@ export function clearAllCaches() {
   for (const subChatId of activeMessageIdsByChat.keys()) {
     clearSubChatCaches(subChatId)
   }
+
+  const remainingStructureIds = Array.from(messageStructureCache.keys())
+  for (const messageId of remainingStructureIds) {
+    messageStructureAtomFamily.remove(messageId)
+  }
+  messageStructureCache.clear()
+
+  const remainingTextPartKeys = Array.from(textPartCache.keys())
+  for (const key of remainingTextPartKeys) {
+    textPartAtomFamily.remove(key)
+  }
+  textPartCache.clear()
 }
 
 // ============================================================================

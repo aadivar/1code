@@ -225,13 +225,102 @@ export const lastSelectedCodexModelIdAtom = atomWithStorage<string>(
   { getOnInit: true },
 )
 
-export const lastSelectedCodexThinkingAtom = atomWithStorage<
-  "low" | "medium" | "high" | "xhigh"
->(
+export type CodexThinkingPreference = "low" | "medium" | "high" | "xhigh"
+
+export const lastSelectedCodexThinkingAtom = atomWithStorage<CodexThinkingPreference>(
   "agents:lastSelectedCodexThinking",
   "high",
   undefined,
   { getOnInit: true },
+)
+
+// Storage for per-subChat Claude model selection.
+// Falls back to lastSelectedModelIdAtom when sub-chat has no explicit selection yet.
+const subChatModelIdsStorageAtom = atomWithStorage<Record<string, string>>(
+  "agents:subChatModelIds",
+  {},
+  undefined,
+  { getOnInit: true },
+)
+
+export const subChatModelIdAtomFamily = atomFamily((subChatId: string) =>
+  atom(
+    (get) => {
+      if (!subChatId) return get(lastSelectedModelIdAtom)
+      return get(subChatModelIdsStorageAtom)[subChatId] ?? get(lastSelectedModelIdAtom)
+    },
+    (get, set, newModelId: string) => {
+      if (!subChatId) {
+        set(lastSelectedModelIdAtom, newModelId)
+        return
+      }
+      const current = get(subChatModelIdsStorageAtom)
+      if (current[subChatId] === newModelId) return
+      set(subChatModelIdsStorageAtom, { ...current, [subChatId]: newModelId })
+    },
+  ),
+)
+
+// Storage for per-subChat Codex model selection.
+// Falls back to lastSelectedCodexModelIdAtom when sub-chat has no explicit selection yet.
+const subChatCodexModelIdsStorageAtom = atomWithStorage<Record<string, string>>(
+  "agents:subChatCodexModelIds",
+  {},
+  undefined,
+  { getOnInit: true },
+)
+
+export const subChatCodexModelIdAtomFamily = atomFamily((subChatId: string) =>
+  atom(
+    (get) => {
+      if (!subChatId) return get(lastSelectedCodexModelIdAtom)
+      return (
+        get(subChatCodexModelIdsStorageAtom)[subChatId] ??
+        get(lastSelectedCodexModelIdAtom)
+      )
+    },
+    (get, set, newModelId: string) => {
+      if (!subChatId) {
+        set(lastSelectedCodexModelIdAtom, newModelId)
+        return
+      }
+      const current = get(subChatCodexModelIdsStorageAtom)
+      if (current[subChatId] === newModelId) return
+      set(subChatCodexModelIdsStorageAtom, { ...current, [subChatId]: newModelId })
+    },
+  ),
+)
+
+// Storage for per-subChat Codex thinking level.
+// Falls back to lastSelectedCodexThinkingAtom when sub-chat has no explicit selection yet.
+const subChatCodexThinkingStorageAtom = atomWithStorage<
+  Record<string, CodexThinkingPreference>
+>(
+  "agents:subChatCodexThinking",
+  {},
+  undefined,
+  { getOnInit: true },
+)
+
+export const subChatCodexThinkingAtomFamily = atomFamily((subChatId: string) =>
+  atom(
+    (get) => {
+      if (!subChatId) return get(lastSelectedCodexThinkingAtom)
+      return (
+        get(subChatCodexThinkingStorageAtom)[subChatId] ??
+        get(lastSelectedCodexThinkingAtom)
+      )
+    },
+    (get, set, newThinking: CodexThinkingPreference) => {
+      if (!subChatId) {
+        set(lastSelectedCodexThinkingAtom, newThinking)
+        return
+      }
+      const current = get(subChatCodexThinkingStorageAtom)
+      if (current[subChatId] === newThinking) return
+      set(subChatCodexThinkingStorageAtom, { ...current, [subChatId]: newThinking })
+    },
+  ),
 )
 
 // Storage for all sub-chat modes (persisted per subChatId)
@@ -393,6 +482,31 @@ export const diffFilesCollapsedAtomFamily = atomFamily((chatId: string) =>
     },
   ),
 )
+
+// Helpers for split view ratio management
+export function getDefaultRatios(n: number): number[] {
+  if (n <= 0) return []
+  return Array(n).fill(1 / n) as number[]
+}
+
+export function addPaneRatio(ratios: number[]): number[] {
+  const n = ratios.length + 1
+  const scale = (n - 1) / n
+  return [...ratios.map(r => r * scale), 1 / n]
+}
+
+export function removePaneRatio(ratios: number[], removeIdx: number): number[] {
+  if (removeIdx < 0 || removeIdx >= ratios.length) return getDefaultRatios(ratios.length)
+  const removed = ratios[removeIdx]!
+  const rest = ratios.filter((_, i) => i !== removeIdx)
+  if (rest.length === 0) return []
+  const sum = rest.reduce((a, b) => a + b, 0)
+  if (sum === 0) return getDefaultRatios(rest.length)
+  const result = rest.map(r => r + (r / sum) * removed)
+  // Normalize to prevent floating-point drift
+  const total = result.reduce((a, b) => a + b, 0)
+  return total > 0 ? result.map(r => r / total) : getDefaultRatios(rest.length)
+}
 
 // Sub-chats display mode - tabs (horizontal) or sidebar (vertical list)
 // Window-scoped so each window can have its own layout preference
@@ -581,11 +695,11 @@ export const pendingPrMessageAtom = atom<{ message: string; subChatId: string } 
 
 // Pending Review message to send to chat
 // Set by ChatView when "Review" is clicked, consumed by ChatViewInner
-export const pendingReviewMessageAtom = atom<string | null>(null)
+export const pendingReviewMessageAtom = atom<{ message: string; subChatId: string } | null>(null)
 
 // Pending merge conflict resolution message to send to chat
 // Set when user clicks "Fix Conflicts" button, consumed by ChatViewInner
-export const pendingConflictResolutionMessageAtom = atom<string | null>(null)
+export const pendingConflictResolutionMessageAtom = atom<{ message: string; subChatId: string } | null>(null)
 
 // Pending auth retry - stores failed message when auth-error occurs
 // After successful OAuth flow, this triggers automatic retry of the message
@@ -679,11 +793,11 @@ export const lastSelectedBranchesAtom = atomWithStorage<
 
 // Compacting status per sub-chat
 // Set<subChatId> - subChats currently being compacted
-export const compactingSubChatsAtom = atom<Set<string>>(new Set())
+export const compactingSubChatsAtom = atom<Set<string>>(new Set<string>())
 
 // Track IDs of chats/subchats created in this browser session (NOT persisted - resets on reload)
 // Used to determine whether to show placeholder + typewriter effect
-export const justCreatedIdsAtom = atom<Set<string>>(new Set())
+export const justCreatedIdsAtom = atom<Set<string>>(new Set<string>())
 
 // Pending user questions from AskUserQuestion tool
 // Set when Claude requests user input, cleared when answered or skipped

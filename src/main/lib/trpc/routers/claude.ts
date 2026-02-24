@@ -262,6 +262,20 @@ const getClaudeQuery = async () => {
 // Active sessions for cancellation
 const activeSessions = new Map<string, AbortController>()
 
+/** Check if there are any active Claude streaming sessions */
+export function hasActiveClaudeSessions(): boolean {
+  return activeSessions.size > 0
+}
+
+/** Abort all active Claude sessions so their cleanup saves partial state */
+export function abortAllClaudeSessions(): void {
+  for (const [subChatId, controller] of activeSessions) {
+    console.log(`[claude] Aborting session ${subChatId} before reload`)
+    controller.abort()
+  }
+  activeSessions.clear()
+}
+
 // In-memory cache of working MCP server names (resets on app restart)
 // Key: "scope::serverName" where scope is "__global__" or projectPath
 // Value: true if working (has tools), false if failed
@@ -1141,8 +1155,8 @@ export const claudeRouter = router({
             // MCP servers to pass to SDK (read from ~/.claude.json)
             let mcpServersForSdk: Record<string, any> | undefined
 
-            // Ensure isolated config dir exists and symlink skills/agents from ~/.claude/
-            // This is needed because SDK looks for skills at $CLAUDE_CONFIG_DIR/skills/
+            // Ensure isolated config dir exists and symlink selected ~/.claude/ assets
+            // This is needed because SDK looks for these under $CLAUDE_CONFIG_DIR/
             // OPTIMIZATION: Only create symlinks once per subChatId (cached)
             try {
               await fs.mkdir(isolatedConfigDir, { recursive: true })
@@ -1151,46 +1165,102 @@ export const claudeRouter = router({
               const cacheKey = isUsingOllama ? input.chatId : input.subChatId
               if (!symlinksCreated.has(cacheKey)) {
                 const homeClaudeDir = path.join(os.homedir(), ".claude")
+                const symlinkType =
+                  process.platform === "win32" ? "junction" : "dir"
+
                 const skillsSource = path.join(homeClaudeDir, "skills")
                 const skillsTarget = path.join(isolatedConfigDir, "skills")
+                const commandsSource = path.join(homeClaudeDir, "commands")
+                const commandsTarget = path.join(isolatedConfigDir, "commands")
                 const agentsSource = path.join(homeClaudeDir, "agents")
                 const agentsTarget = path.join(isolatedConfigDir, "agents")
+                const pluginsSource = path.join(homeClaudeDir, "plugins")
+                const pluginsTarget = path.join(isolatedConfigDir, "plugins")
+                const settingsSource = path.join(homeClaudeDir, "settings.json")
+                const settingsTarget = path.join(
+                  isolatedConfigDir,
+                  "settings.json",
+                )
 
-                // Symlink skills directory if source exists and target doesn't
-                try {
-                  const skillsSourceExists = await fs
-                    .stat(skillsSource)
-                    .then(() => true)
-                    .catch(() => false)
-                  const skillsTargetExists = await fs
-                    .lstat(skillsTarget)
-                    .then(() => true)
-                    .catch(() => false)
-                  if (skillsSourceExists && !skillsTargetExists) {
-                    await fs.symlink(skillsSource, skillsTarget, "dir")
+                let symlinkSetupComplete = true
+                let symlinkSetupHadErrors = false
+
+                const ensureSymlink = async (
+                  sourcePath: string,
+                  targetPath: string,
+                  label: string,
+                  targetKind: "dir" | "file",
+                ) => {
+                  try {
+                    const sourceExists = await fs
+                      .stat(sourcePath)
+                      .then(() => true)
+                      .catch(() => false)
+                    const targetExists = await fs
+                      .lstat(targetPath)
+                      .then(() => true)
+                      .catch(() => false)
+
+                    if (sourceExists && !targetExists) {
+                      if (targetKind === "dir") {
+                        await fs.symlink(sourcePath, targetPath, symlinkType)
+                      } else {
+                        await fs.symlink(sourcePath, targetPath)
+                      }
+                    }
+
+                    // Keep rechecking on next request when source is not created yet.
+                    if (!sourceExists && !targetExists) {
+                      symlinkSetupComplete = false
+                    }
+                  } catch (symlinkErr) {
+                    symlinkSetupComplete = false
+                    symlinkSetupHadErrors = true
+                    console.warn(
+                      `[claude] Failed to symlink ${label}:`,
+                      (symlinkErr as Error).message,
+                    )
                   }
-                } catch (symlinkErr) {
-                  // Ignore symlink errors (might already exist or permission issues)
                 }
 
-                // Symlink agents directory if source exists and target doesn't
-                try {
-                  const agentsSourceExists = await fs
-                    .stat(agentsSource)
-                    .then(() => true)
-                    .catch(() => false)
-                  const agentsTargetExists = await fs
-                    .lstat(agentsTarget)
-                    .then(() => true)
-                    .catch(() => false)
-                  if (agentsSourceExists && !agentsTargetExists) {
-                    await fs.symlink(agentsSource, agentsTarget, "dir")
-                  }
-                } catch (symlinkErr) {
-                  // Ignore symlink errors (might already exist or permission issues)
-                }
+                await ensureSymlink(
+                  skillsSource,
+                  skillsTarget,
+                  "skills directory",
+                  "dir",
+                )
+                await ensureSymlink(
+                  commandsSource,
+                  commandsTarget,
+                  "commands directory",
+                  "dir",
+                )
+                await ensureSymlink(
+                  agentsSource,
+                  agentsTarget,
+                  "agents directory",
+                  "dir",
+                )
+                await ensureSymlink(
+                  pluginsSource,
+                  pluginsTarget,
+                  "plugins directory",
+                  "dir",
+                )
+                await ensureSymlink(
+                  settingsSource,
+                  settingsTarget,
+                  "settings.json",
+                  "file",
+                )
 
-                symlinksCreated.add(cacheKey)
+                if (symlinkSetupComplete) {
+                  symlinksCreated.add(cacheKey)
+                } else if (symlinkSetupHadErrors) {
+                  console.warn(
+                    "[claude] Symlink setup incomplete, will retry on next request",
+                  )
+                }
               }
 
               // Read MCP servers from all sources for the original project path
@@ -1318,7 +1388,7 @@ export const claudeRouter = router({
             // If so, use that instead of OAuth (allows using custom API proxies)
             // Based on PR #29 by @sa4hnd
             const hasExistingApiConfig = !!(
-              claudeEnv.ANTHROPIC_API_KEY || claudeEnv.ANTHROPIC_BASE_URL
+              claudeEnv.ANTHROPIC_API_KEY || claudeEnv.ANTHROPIC_AUTH_TOKEN || claudeEnv.ANTHROPIC_BASE_URL
             )
 
             if (hasExistingApiConfig) {
@@ -2107,9 +2177,20 @@ ${prompt}
                       rawErrorCode === "authentication_failed" ||
                       sdkError.includes("authentication")
                     ) {
-                      errorCategory = "AUTH_FAILED_SDK"
-                      errorContext =
-                        "Authentication failed - not logged into Claude Code CLI"
+                      // Show OAuth reconnect only when OAuth auth is actually in use.
+                      // If API-key auth is active, treat as API auth failure instead.
+                      const isApiKeyAuthMode = Boolean(
+                        finalCustomConfig || hasExistingApiConfig,
+                      )
+                      if (isApiKeyAuthMode) {
+                        errorCategory = "AUTH_FAILURE"
+                        errorContext =
+                          "Authentication failed - check your API key"
+                      } else {
+                        errorCategory = "AUTH_FAILED_SDK"
+                        errorContext =
+                          "Authentication failed - not logged into Claude Code CLI"
+                      }
                     } else if (
                       String(sdkError).includes("invalid_token") ||
                       String(sdkError).includes("Invalid access token")
@@ -2121,7 +2202,7 @@ ${prompt}
                       sdkError.includes("api_key")
                     ) {
                       errorCategory = "INVALID_API_KEY_SDK"
-                      errorContext = "Invalid API key in Claude Code CLI"
+                      errorContext = sdkError
                     } else if (
                       rawErrorCode === "rate_limit_exceeded" ||
                       sdkError.includes("rate")

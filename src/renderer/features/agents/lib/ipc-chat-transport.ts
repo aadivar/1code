@@ -21,10 +21,10 @@ import {
   askUserQuestionResultsAtom,
   compactingSubChatsAtom,
   expiredUserQuestionsAtom,
-  lastSelectedModelIdAtom,
   MODEL_ID_MAP,
   pendingAuthRetryMessageAtom,
   pendingUserQuestionsAtom,
+  subChatModelIdAtomFamily,
 } from "../atoms"
 import { useAgentSubChatStore } from "../stores/sub-chat-store"
 import type { AgentMessageMetadata } from "../ui/agent-message-usage"
@@ -169,8 +169,8 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
     const historyEnabled = appStore.get(historyEnabledAtom)
     const enableTasks = appStore.get(enableTasksAtom)
 
-    // Read model selection dynamically (so model changes apply to existing chats)
-    const selectedModelId = appStore.get(lastSelectedModelIdAtom)
+    // Read model selection dynamically per sub-chat (so split panes stay independent)
+    const selectedModelId = appStore.get(subChatModelIdAtomFamily(this.config.subChatId))
     const modelString = MODEL_ID_MAP[selectedModelId] || MODEL_ID_MAP["opus"]
 
     const storedCustomConfig = appStore.get(
@@ -417,8 +417,15 @@ export class IPCChatTransport implements ChatTransport<UIMessage> {
                 // Show toast based on error category
                 const config = ERROR_TOAST_CONFIG[category]
                 const title = config?.title || "Claude error"
+                // For auth/API key failures, prefer original backend error to aid debugging
+                const preferOriginalError =
+                  category === "AUTH_FAILURE" ||
+                  category === "INVALID_API_KEY_SDK" ||
+                  category === "INVALID_API_KEY"
                 // Use config description if set, otherwise fall back to errorText
-                const rawDescription = config?.description || chunk.errorText || "An unexpected error occurred"
+                const rawDescription = preferOriginalError
+                  ? chunk.errorText || config?.description || "An unexpected error occurred"
+                  : config?.description || chunk.errorText || "An unexpected error occurred"
                 // Truncate long descriptions for toast (keep first 300 chars)
                 const description = rawDescription.length > 300
                   ? rawDescription.slice(0, 300) + "..."

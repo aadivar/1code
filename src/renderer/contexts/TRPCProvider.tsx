@@ -21,6 +21,7 @@ export function TRPCProvider({ children }: TRPCProviderProps) {
       defaultOptions: {
         queries: {
           staleTime: 5000,
+          gcTime: 60_000,
           refetchOnWindowFocus: false,
           networkMode: "always",
           retry: false,

@@ -745,6 +745,7 @@ export const chatsRouter = router({
       z.object({
         subChatId: z.string(),
         messageId: z.string(),
+        messageIndex: z.number().int().nonnegative().optional(),
         name: z.string().optional(),
       }),
     )
@@ -761,9 +762,15 @@ export const chatsRouter = router({
 
       // 2. Parse messages and find the cutoff point
       const allMessages = JSON.parse(sourceSubChat.messages || "[]")
-      const cutoffIndex = allMessages.findIndex(
+      let cutoffIndex = allMessages.findIndex(
         (m: any) => m.id === input.messageId,
       )
+      // Fallback: AI SDK generates its own message IDs on the client which differ
+      // from the server-generated UUIDs stored in the DB. Use the message index
+      // (passed from the client) as a fallback when the ID doesn't match.
+      if (cutoffIndex === -1 && input.messageIndex !== undefined && input.messageIndex < allMessages.length) {
+        cutoffIndex = input.messageIndex
+      }
       if (cutoffIndex === -1) throw new Error("Message not found")
 
       // 3. Slice messages up to and including the target

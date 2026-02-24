@@ -1,5 +1,6 @@
 import type { ChatTransport, UIMessage } from "ai"
 import { toast } from "sonner"
+import { normalizeCodexStreamChunk } from "../../../../shared/codex-tool-normalizer"
 import {
   codexApiKeyAtom,
   codexLoginModalOpenAtom,
@@ -11,9 +12,9 @@ import {
 import { appStore } from "../../../lib/jotai-store"
 import { trpcClient } from "../../../lib/trpc"
 import {
-  lastSelectedCodexModelIdAtom,
-  lastSelectedCodexThinkingAtom,
   pendingAuthRetryMessageAtom,
+  subChatCodexModelIdAtomFamily,
+  subChatCodexThinkingAtomFamily,
 } from "../atoms"
 import { CODEX_MODELS, type CodexThinkingLevel } from "./models"
 import { useAgentSubChatStore } from "../stores/sub-chat-store"
@@ -78,9 +79,9 @@ async function resolveCodexCredentialsForAuthError(): Promise<{
   }
 }
 
-function getSelectedCodexModel(): string {
-  const selectedModelId = appStore.get(lastSelectedCodexModelIdAtom)
-  const selectedThinking = appStore.get(lastSelectedCodexThinkingAtom)
+function getSelectedCodexModel(subChatId: string): string {
+  const selectedModelId = appStore.get(subChatCodexModelIdAtomFamily(subChatId))
+  const selectedThinking = appStore.get(subChatCodexThinkingAtomFamily(subChatId))
   const selectedModel =
     CODEX_MODELS.find((model) => model.id === selectedModelId) ||
     CODEX_MODELS.find((model) => model.id === "gpt-5.3-codex") ||
@@ -135,7 +136,7 @@ export class ACPChatTransport implements ChatTransport<UIMessage> {
       forceFreshSessionSubChats.delete(this.config.subChatId)
     }
     const codexApiKey = normalizeCodexApiKey(appStore.get(codexApiKeyAtom))
-    const selectedModel = getSelectedCodexModel()
+    const selectedModel = getSelectedCodexModel(this.config.subChatId)
 
     return new ReadableStream({
       start: (controller) => {
@@ -235,7 +236,8 @@ export class ACPChatTransport implements ChatTransport<UIMessage> {
               }
 
               try {
-                controller.enqueue(chunk)
+                const normalizedChunk = normalizeCodexStreamChunk(chunk) as UIMessageChunk
+                controller.enqueue(normalizedChunk)
               } catch {
                 // Stream already closed
               }

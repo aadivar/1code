@@ -16,8 +16,17 @@ import { createIPCHandler } from "trpc-electron/main"
 import { createAppRouter } from "../lib/trpc/routers"
 import { getAuthManager, handleAuthCode, getBaseUrl } from "../index"
 import { registerGitWatcherIPC } from "../lib/git/watcher"
+import { hasActiveClaudeSessions, abortAllClaudeSessions } from "../lib/trpc/routers/claude"
+import { hasActiveCodexStreams, abortAllCodexStreams } from "../lib/trpc/routers/codex"
 import { registerThemeScannerIPC } from "../lib/vscode-theme-scanner"
 import { windowManager } from "./window-manager"
+
+// Flag to bypass close confirmation when app.quit() has already been confirmed
+let isQuitting = false
+
+export function setIsQuitting(value: boolean): void {
+  isQuitting = value
+}
 
 // Helper to get window from IPC event
 function getWindowFromEvent(
@@ -693,12 +702,36 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
   })
 
   // Disable Cmd+R / Ctrl+R to prevent accidental page refresh
-  // Users can still use Cmd+Shift+R / Ctrl+Shift+R for intentional reloads
+  // Cmd+Shift+R / Ctrl+Shift+R is allowed but warns if there are active streams
   window.webContents.on("before-input-event", (event, input) => {
     const isMac = process.platform === "darwin"
     const modifierKey = isMac ? input.meta : input.control
-    if (modifierKey && input.key.toLowerCase() === "r" && !input.shift) {
-      event.preventDefault()
+    if (modifierKey && input.key.toLowerCase() === "r") {
+      if (!input.shift) {
+        // Block Cmd+R entirely
+        event.preventDefault()
+      } else if (hasActiveClaudeSessions() || hasActiveCodexStreams()) {
+        // Cmd+Shift+R with active streams — intercept and confirm
+        event.preventDefault()
+        dialog
+          .showMessageBox(window, {
+            type: "warning",
+            buttons: ["Cancel", "Reload Anyway"],
+            defaultId: 0,
+            cancelId: 0,
+            title: "Active Sessions",
+            message: "There are active agent sessions running.",
+            detail:
+              "Reloading will interrupt them. The current progress will be saved. Are you sure you want to reload?",
+          })
+          .then(({ response }) => {
+            if (response === 1) {
+              abortAllClaudeSessions()
+              abortAllCodexStreams()
+              window.webContents.reloadIgnoringCache()
+            }
+          })
+      }
     }
   })
 
@@ -706,6 +739,39 @@ export function createWindow(options?: { chatId?: string; subChatId?: string }):
   window.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
     return { action: "deny" }
+  })
+
+  // Prevent window close if there are active streaming sessions
+  window.on("close", (event) => {
+    // Skip confirmation if app quit was already confirmed by the user
+    if (isQuitting) {
+      // Still abort sessions gracefully so partial state is saved
+      abortAllClaudeSessions()
+      abortAllCodexStreams()
+      return
+    }
+
+    if (hasActiveClaudeSessions() || hasActiveCodexStreams()) {
+      event.preventDefault()
+      dialog
+        .showMessageBox(window, {
+          type: "warning",
+          buttons: ["Cancel", "Close Anyway"],
+          defaultId: 0,
+          cancelId: 0,
+          title: "Active Sessions",
+          message: "There are active agent sessions running.",
+          detail:
+            "Closing this window will interrupt them. The current progress will be saved. Are you sure you want to close?",
+        })
+        .then(({ response }) => {
+          if (response === 1) {
+            abortAllClaudeSessions()
+            abortAllCodexStreams()
+            window.destroy()
+          }
+        })
+    }
   })
 
   // Handle window close

@@ -13,6 +13,8 @@ const manuallyAborted = new Map<string, boolean>() // Track if chat was manually
 export const agentChatStore = {
   get: (id: string) => chats.get(id),
 
+  keys: () => Array.from(chats.keys()),
+
   set: (id: string, chat: Chat<any>, parentChatId: string) => {
     chats.set(id, chat)
     parentChatIds.set(id, parentChatId)

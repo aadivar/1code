@@ -22,6 +22,13 @@ interface CachedToolState {
 
 const toolStateCache = new Map<string, CachedToolState>()
 
+export function clearToolStateCachesByToolCallIds(toolCallIds: string[]) {
+  for (const toolCallId of toolCallIds) {
+    toolStateCache.delete(toolCallId)
+    askUserStateCache.delete(toolCallId)
+  }
+}
+
 function getToolStateSnapshot(part: any): CachedToolState {
   return {
     state: part.state,

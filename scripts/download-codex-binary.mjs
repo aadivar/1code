@@ -55,10 +55,16 @@ const PLATFORMS = {
 }
 
 function getRequestHeaders() {
-  return {
+  const headers = {
     "User-Agent": USER_AGENT,
     Accept: "application/vnd.github+json",
   }
+  // Use GITHUB_TOKEN if available (avoids API rate limits in CI)
+  const token = process.env.GITHUB_TOKEN
+  if (token) {
+    headers.Authorization = `Bearer ${token}`
+  }
+  return headers
 }
 
 function fetchJson(url) {
@@ -335,6 +341,13 @@ async function main() {
   const args = process.argv.slice(2)
   const downloadAll = args.includes("--all")
   const specifiedVersion = getVersionArg(args)
+  const platformArgIdx = args.indexOf("--platform")
+  const platformArgEq = args.find((a) => a.startsWith("--platform="))
+  const specifiedPlatform = platformArgEq
+    ? platformArgEq.split("=")[1]
+    : platformArgIdx >= 0
+      ? args[platformArgIdx + 1]
+      : null
 
   console.log("Codex Binary Downloader")
   console.log("=======================\n")
@@ -347,6 +360,13 @@ async function main() {
   let platformsToDownload
   if (downloadAll) {
     platformsToDownload = Object.keys(PLATFORMS)
+  } else if (specifiedPlatform) {
+    if (!PLATFORMS[specifiedPlatform]) {
+      console.error(`Unsupported platform: ${specifiedPlatform}`)
+      console.log(`Supported platforms: ${Object.keys(PLATFORMS).join(", ")}`)
+      process.exit(1)
+    }
+    platformsToDownload = [specifiedPlatform]
   } else {
     const currentPlatform = `${process.platform}-${process.arch}`
     if (!PLATFORMS[currentPlatform]) {

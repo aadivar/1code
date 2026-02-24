@@ -23,6 +23,7 @@ export interface MessageTokenData {
   totalOutputTokens: number
   totalCostUsd: number
   messageCount: number
+  contextWindow?: number
 }
 
 interface AgentContextIndicatorProps {
@@ -102,7 +103,7 @@ export const AgentContextIndicator = memo(function AgentContextIndicator({
   disabled,
 }: AgentContextIndicatorProps) {
   const contextTokens = tokenData.totalInputTokens
-  const contextWindow = CONTEXT_WINDOWS[modelId]
+  const contextWindow = tokenData.contextWindow ?? CONTEXT_WINDOWS[modelId]
   const percentUsed = Math.min(100, (contextTokens / contextWindow) * 100)
   const isEmpty = contextTokens === 0
 

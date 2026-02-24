@@ -3,9 +3,10 @@
  * Downloads Claude Code native binaries for bundling with the Electron app.
  *
  * Usage:
- *   node scripts/download-claude-binary.mjs           # Download for current platform
- *   node scripts/download-claude-binary.mjs --all     # Download all platforms
- *   node scripts/download-claude-binary.mjs --version 2.1.5  # Specific version
+ *   node scripts/download-claude-binary.mjs                          # Download for current platform
+ *   node scripts/download-claude-binary.mjs --all                    # Download all platforms
+ *   node scripts/download-claude-binary.mjs --platform darwin-x64    # Download for specific platform
+ *   node scripts/download-claude-binary.mjs --version=2.1.5          # Specific version
  */
 
 import fs from "node:fs"
@@ -28,6 +29,7 @@ const PLATFORMS = {
   "darwin-x64": { dir: "darwin-x64", binary: "claude" },
   "linux-arm64": { dir: "linux-arm64", binary: "claude" },
   "linux-x64": { dir: "linux-x64", binary: "claude" },
+  "win32-arm64": { dir: "win32-arm64", binary: "claude.exe" },
   "win32-x64": { dir: "win32-x64", binary: "claude.exe" },
 }
 
@@ -218,6 +220,13 @@ async function main() {
   const downloadAll = args.includes("--all")
   const versionArg = args.find((a) => a.startsWith("--version="))
   const specifiedVersion = versionArg?.split("=")[1]
+  const platformArgIdx = args.indexOf("--platform")
+  const platformArgEq = args.find((a) => a.startsWith("--platform="))
+  const specifiedPlatform = platformArgEq
+    ? platformArgEq.split("=")[1]
+    : platformArgIdx >= 0
+      ? args[platformArgIdx + 1]
+      : null
 
   console.log("Claude Code Binary Downloader")
   console.log("=============================\n")
@@ -242,6 +251,14 @@ async function main() {
   let platformsToDownload
   if (downloadAll) {
     platformsToDownload = Object.keys(PLATFORMS)
+  } else if (specifiedPlatform) {
+    // Specific platform requested via --platform
+    if (!PLATFORMS[specifiedPlatform]) {
+      console.error(`Unsupported platform: ${specifiedPlatform}`)
+      console.log(`Supported platforms: ${Object.keys(PLATFORMS).join(", ")}`)
+      process.exit(1)
+    }
+    platformsToDownload = [specifiedPlatform]
   } else {
     // Current platform only
     const currentPlatform = `${process.platform}-${process.arch}`

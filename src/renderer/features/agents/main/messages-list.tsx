@@ -5,11 +5,11 @@ import { createContext, memo, useCallback, useContext, useLayoutEffect, useMemo,
 import { showMessageJsonAtom } from "../atoms"
 import { extractTextMentions, TextMentionBlocks } from "../mentions/render-file-mentions"
 import {
-  chatStatusAtom,
-  isLastMessageAtomFamily,
-  isStreamingAtom,
+  getPerChatMessageKey,
+  isLastMessagePerChatAtomFamily,
   messageAtomFamily,
 } from "../stores/message-store"
+import { useStreamingStatusStore } from "../stores/streaming-status-store"
 import { MessageJsonDisplay } from "../ui/message-json-display"
 import { AssistantMessageItem } from "./assistant-message-item"
 
@@ -371,7 +371,8 @@ const NonStreamingMessageItem = memo(function NonStreamingMessageItem({
   sandboxSetupStatus: "cloning" | "ready" | "error"
 }) {
   // Subscribe to this specific message via Jotai - only re-renders when THIS message changes
-  const message = useAtomValue(messageAtomFamily(messageId))
+  const messageKey = getPerChatMessageKey(subChatId, messageId)
+  const message = useAtomValue(messageAtomFamily(messageKey))
 
   if (!message) return null
 
@@ -405,11 +406,14 @@ const StreamingMessageItem = memo(function StreamingMessageItem({
   sandboxSetupStatus: "cloning" | "ready" | "error"
 }) {
   // Subscribe to this specific message via Jotai - only re-renders when THIS message changes
-  const message = useAtomValue(messageAtomFamily(messageId))
+  const messageKey = getPerChatMessageKey(subChatId, messageId)
+  const message = useAtomValue(messageAtomFamily(messageKey))
 
-  // Subscribe to streaming status
-  const isStreaming = useAtomValue(isStreamingAtom)
-  const status = useAtomValue(chatStatusAtom)
+  // Subscribe to per-subchat streaming status
+  const status = useStreamingStatusStore(
+    useCallback((state) => state.statuses[subChatId] ?? "ready", [subChatId]),
+  )
+  const isStreaming = status === "streaming" || status === "submitted"
 
   if (!message) return null
 
@@ -484,7 +488,8 @@ export const MessageItemWrapper = memo(function MessageItemWrapper({
 
   // Only subscribe to isLast - NOT to message content!
   // StreamingMessageItem and NonStreamingMessageItem will subscribe to message themselves
-  const isLast = useAtomValue(isLastMessageAtomFamily(messageId))
+  const perChatKey = `${subChatId}:${messageId}`
+  const isLast = useAtomValue(isLastMessagePerChatAtomFamily(perChatKey))
 
   // Only the last message subscribes to streaming status
   if (isLast) {
@@ -524,7 +529,7 @@ export const MessageItemWrapper = memo(function MessageItemWrapper({
 interface MemoizedAssistantMessagesProps {
   assistantMsgIds: string[]
   subChatId: string
-  chatId: string
+  chatId?: string
   isMobile: boolean
   sandboxSetupStatus: "cloning" | "ready" | "error"
 }
@@ -572,7 +577,7 @@ export const MemoizedAssistantMessages = memo(function MemoizedAssistantMessages
           key={id}
           messageId={id}
           subChatId={subChatId}
-          chatId={chatId}
+          chatId={chatId ?? subChatId}
           isMobile={isMobile}
           sandboxSetupStatus={sandboxSetupStatus}
         />

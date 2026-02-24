@@ -10,8 +10,11 @@ import { useEffect, type RefObject } from "react"
  */
 export function useToggleFocusOnCmdEsc(
   editorRef: RefObject<{ focus: () => void; blur: () => void } | null>,
+  enabled = true,
 ) {
   useEffect(() => {
+    if (!enabled) return
+
     const handleKeyDown = (e: KeyboardEvent) => {
       // Only handle Cmd+Esc (or Ctrl+Esc on Windows/Linux)
       if (
@@ -49,5 +52,5 @@ export function useToggleFocusOnCmdEsc(
 
     window.addEventListener("keydown", handleKeyDown, { capture: true })
     return () => window.removeEventListener("keydown", handleKeyDown, { capture: true })
-  }, [editorRef])
+  }, [editorRef, enabled])
 }

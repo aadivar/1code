@@ -114,10 +114,10 @@ export const claudeCodeRouter = router({
    */
   hasExistingCliConfig: publicProcedure.query(() => {
     const shellEnv = getClaudeShellEnvironment()
-    const hasConfig = !!(shellEnv.ANTHROPIC_API_KEY || shellEnv.ANTHROPIC_BASE_URL)
+    const hasConfig = !!(shellEnv.ANTHROPIC_API_KEY || shellEnv.ANTHROPIC_AUTH_TOKEN || shellEnv.ANTHROPIC_BASE_URL)
     return {
       hasConfig,
-      hasApiKey: !!shellEnv.ANTHROPIC_API_KEY,
+      hasApiKey: !!(shellEnv.ANTHROPIC_API_KEY || shellEnv.ANTHROPIC_AUTH_TOKEN),
       baseUrl: shellEnv.ANTHROPIC_BASE_URL || null,
     }
   }),

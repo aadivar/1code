@@ -197,7 +197,18 @@ export function SubChatSelector({
   chatId,
 }: SubChatSelectorProps) {
   // Use shallow comparison to prevent re-renders when arrays have same content
-  const { activeSubChatId, openSubChatIds, pinnedSubChatIds, allSubChats, parentChatId, togglePinSubChat } = useAgentSubChatStore(
+  const {
+    activeSubChatId,
+    openSubChatIds,
+    pinnedSubChatIds,
+    allSubChats,
+    parentChatId,
+    togglePinSubChat,
+    splitPaneIds,
+    addToSplit,
+    removeFromSplit,
+    closeSplit,
+  } = useAgentSubChatStore(
     useShallow((state) => ({
       activeSubChatId: state.activeSubChatId,
       openSubChatIds: state.openSubChatIds,
@@ -205,6 +216,10 @@ export function SubChatSelector({
       allSubChats: state.allSubChats,
       parentChatId: state.chatId,
       togglePinSubChat: state.togglePinSubChat,
+      splitPaneIds: state.splitPaneIds,
+      addToSplit: state.addToSplit,
+      removeFromSplit: state.removeFromSplit,
+      closeSplit: state.closeSplit,
     }))
   )
   const [loadingSubChats] = useAtom(loadingSubChatsAtom)
@@ -261,6 +276,14 @@ export function SubChatSelector({
   const truncatedTabsRef = useRef<Set<string>>(new Set())
   const searchHistoryPopoverRef = useRef<SearchHistoryPopoverRef>(null)
 
+  const allSubChatsById = useMemo(() => {
+    const map = new Map<string, SubChatMeta>()
+    for (const chat of allSubChats) {
+      map.set(chat.id, chat)
+    }
+    return map
+  }, [allSubChats])
+
   // Map open IDs to metadata and sort: pinned first, then preserve user's tab order
   const openSubChats = useMemo(() => {
     const pinnedChats: SubChatMeta[] = []
@@ -268,7 +291,7 @@ export function SubChatSelector({
 
     // Separate pinned and unpinned while preserving order
     openSubChatIds.forEach((id) => {
-      const chat = allSubChats.find((sc) => sc.id === id)
+      const chat = allSubChatsById.get(id)
       if (!chat) return
 
       if (pinnedSubChatIds.includes(id)) {
@@ -286,8 +309,29 @@ export function SubChatSelector({
     })
 
     // Unpinned maintain their order from openSubChatIds (user's tab order)
-    return [...pinnedChats, ...unpinnedChats]
-  }, [openSubChatIds, allSubChats, pinnedSubChatIds])
+    const result = [...pinnedChats, ...unpinnedChats]
+
+    // Keep split tabs adjacent when split is active.
+    if (splitPaneIds.length >= 2) {
+      const splitIdsSet = new Set(splitPaneIds)
+      const firstSplitIdx = result.findIndex((chat) => splitIdsSet.has(chat.id))
+      if (firstSplitIdx >= 0) {
+        const splitChats = result
+          .filter((chat) => splitIdsSet.has(chat.id))
+          .sort((a, b) => splitPaneIds.indexOf(a.id) - splitPaneIds.indexOf(b.id))
+        const nonSplitChats = result.filter((chat) => !splitIdsSet.has(chat.id))
+        const insertAt = Math.min(firstSplitIdx, nonSplitChats.length)
+        return [
+          ...nonSplitChats.slice(0, insertAt),
+          ...splitChats,
+          ...nonSplitChats.slice(insertAt),
+        ]
+      }
+    }
+
+    return result
+  }, [openSubChatIds, allSubChatsById, pinnedSubChatIds, splitPaneIds])
+  const splitPaneIdSet = useMemo(() => new Set(splitPaneIds), [splitPaneIds])
 
   const onSwitch = useCallback(
     (subChatId: string) => {
@@ -661,6 +705,9 @@ export function SubChatSelector({
             ? null
             : openSubChats.map((subChat, index) => {
                 const isActive = activeSubChatId === subChat.id
+                const isInSplitPair = splitPaneIdSet.has(subChat.id)
+                const hasSplitPrev = index > 0 && splitPaneIdSet.has(openSubChats[index - 1]?.id)
+                const hasSplitNext = index < openSubChats.length - 1 && splitPaneIdSet.has(openSubChats[index + 1]?.id)
                 const isLoading = loadingSubChats.has(subChat.id)
                 const hasUnseen = subChatUnseenChanges.has(subChat.id)
                 const hasTabsToRight = index < openSubChats.length - 1
@@ -721,6 +768,10 @@ export function SubChatSelector({
                           isActive
                             ? "bg-muted text-foreground max-w-[180px]"
                             : "hover:bg-muted/80 max-w-[150px]",
+                          isInSplitPair && "border border-border/60",
+                          isInSplitPair && !isActive && "bg-muted/40 hover:bg-muted/60",
+                          isInSplitPair && hasSplitPrev && "-ml-1 rounded-l-none",
+                          isInSplitPair && hasSplitNext && "rounded-r-none",
                         )}
                       >
                         {/* Icon: question icon (priority) OR loading spinner OR mode icon with badge (hide when editing) */}
@@ -849,6 +900,12 @@ export function SubChatSelector({
                       hasTabsToRight={hasTabsToRight}
                       canCloseOtherTabs={openSubChats.length > 2}
                       chatId={parentChatId}
+                      onOpenInSplit={addToSplit}
+                      onCloseSplit={closeSplit}
+                      onRemoveFromSplit={removeFromSplit}
+                      splitPaneCount={splitPaneIds.length}
+                      isActiveTab={isActive}
+                      isSplitTab={isInSplitPair}
                     />
                   </ContextMenu>
                 )

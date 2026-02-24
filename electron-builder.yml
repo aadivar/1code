@@ -5,5 +5,6 @@ mac:
   # Code signing identity - set via APPLE_IDENTITY env var
   # Example: "Developer ID Application: Your Name (TEAM_ID)"
   identity: ${env.APPLE_IDENTITY}
-  notarize:
-    teamId: ${env.APPLE_TEAM_ID}
+  # Notarization is handled explicitly in the CI workflow's "Notarize" step
+  # Disable built-in notarization to avoid double-notarization hangs
+  notarize: false

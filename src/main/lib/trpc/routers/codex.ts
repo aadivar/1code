@@ -6,8 +6,14 @@ import { app } from "electron"
 import { spawn, type ChildProcess } from "node:child_process"
 import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
+import { readdir, readFile } from "node:fs/promises"
+import { homedir } from "node:os"
 import { basename, dirname, join, sep } from "node:path"
 import { z } from "zod"
+import {
+  normalizeCodexAssistantMessage,
+  normalizeCodexStreamChunk,
+} from "../../../../shared/codex-tool-normalizer"
 import { getClaudeShellEnvironment } from "../../claude/env"
 import { resolveProjectPathFromWorktree } from "../../claude-config"
 import { getDatabase, projects as projectsTable, subChats } from "../../db"
@@ -96,6 +102,20 @@ type ActiveCodexStream = {
 }
 
 const activeStreams = new Map<string, ActiveCodexStream>()
+
+/** Check if there are any active Codex streaming sessions */
+export function hasActiveCodexStreams(): boolean {
+  return activeStreams.size > 0
+}
+
+/** Abort all active Codex streams so their cleanup saves partial state */
+export function abortAllCodexStreams(): void {
+  for (const [subChatId, stream] of activeStreams) {
+    console.log(`[codex] Aborting stream ${subChatId} before reload`)
+    stream.controller.abort()
+  }
+  activeStreams.clear()
+}
 const loginSessions = new Map<string, CodexLoginSession>()
 const codexMcpCache = new Map<string, CodexMcpSnapshot>()
 
@@ -118,6 +138,27 @@ const AUTH_HINTS = [
 ]
 const DEFAULT_CODEX_MODEL = "gpt-5.3-codex/high"
 const CODEX_MCP_TOOLS_FETCH_TIMEOUT_MS = 40_000
+const CODEX_USAGE_POLL_ATTEMPTS = 3
+const CODEX_USAGE_POLL_INTERVAL_MS = 200
+
+type CodexTokenUsage = {
+  input_tokens?: number
+  cached_input_tokens?: number
+  output_tokens?: number
+  total_tokens?: number
+}
+
+type CodexTokenCountInfo = {
+  last_token_usage?: CodexTokenUsage
+  model_context_window?: number
+}
+
+type CodexUsageMetadata = {
+  inputTokens?: number
+  outputTokens?: number
+  totalTokens?: number
+  modelContextWindow?: number
+}
 
 const codexMcpListEntrySchema = z
   .object({
@@ -378,6 +419,221 @@ async function runCodexCliChecked(
     result.stdout.trim() ||
     `Codex command failed with exit code ${result.exitCode ?? "unknown"}`
   throw new Error(message)
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolvePromise) => setTimeout(resolvePromise, ms))
+}
+
+function toNonNegativeInt(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return undefined
+  }
+  return Math.trunc(value)
+}
+
+function toTimestampMs(value: unknown): number | undefined {
+  if (typeof value !== "string") {
+    return undefined
+  }
+  const parsed = Date.parse(value)
+  if (!Number.isFinite(parsed)) {
+    return undefined
+  }
+  return parsed
+}
+
+function resolveSessionsRoot(): string {
+  // Match provider env precedence: shell-derived env overrides process.env.
+  const shellCodexHome = getClaudeShellEnvironment().CODEX_HOME?.trim()
+  if (shellCodexHome) {
+    return join(shellCodexHome, "sessions")
+  }
+
+  const processCodexHome = process.env.CODEX_HOME?.trim()
+  if (processCodexHome) {
+    return join(processCodexHome, "sessions")
+  }
+
+  return join(homedir(), ".codex", "sessions")
+}
+
+async function findSessionFileById(sessionId: string): Promise<string | null> {
+  const sessionsRoot = resolveSessionsRoot()
+  const fileSuffix = `-${sessionId}.jsonl`
+  const sortDesc = (values: string[]) =>
+    values.sort((left, right) =>
+      right.localeCompare(left, undefined, { numeric: true }),
+    )
+  const listNames = async (dirPath: string): Promise<string[]> => {
+    try {
+      return await readdir(dirPath, { encoding: "utf8" })
+    } catch {
+      return []
+    }
+  }
+  const years = sortDesc(
+    (await listNames(sessionsRoot)).filter((name) => /^\d{4}$/.test(name)),
+  )
+
+  for (const year of years) {
+    const yearPath = join(sessionsRoot, year)
+    const months = sortDesc(
+      (await listNames(yearPath)).filter((name) => /^\d{2}$/.test(name)),
+    )
+    for (const month of months) {
+      const monthPath = join(yearPath, month)
+      const days = sortDesc(
+        (await listNames(monthPath)).filter((name) => /^\d{2}$/.test(name)),
+      )
+      for (const day of days) {
+        const dayPath = join(monthPath, day)
+        const fileName = (await listNames(dayPath)).find((name) =>
+          name.endsWith(fileSuffix),
+        )
+        if (fileName) {
+          return join(dayPath, fileName)
+        }
+      }
+    }
+  }
+
+  return null
+}
+
+async function readLatestTokenCountInfo(
+  filePath: string,
+  options?: { notBeforeTimestampMs?: number },
+): Promise<CodexTokenCountInfo | null> {
+  let rawContent = ""
+  try {
+    rawContent = await readFile(filePath, "utf8")
+  } catch {
+    return null
+  }
+
+  const lines = rawContent.split("\n")
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const rawLine = lines[index]?.trim()
+    if (!rawLine) continue
+
+    let parsedLine: any
+    try {
+      parsedLine = JSON.parse(rawLine)
+    } catch {
+      continue
+    }
+
+    if (
+      parsedLine?.type !== "event_msg" ||
+      parsedLine?.payload?.type !== "token_count"
+    ) {
+      continue
+    }
+
+    const eventTimestampMs = toTimestampMs(parsedLine?.timestamp)
+    const notBeforeTimestampMs = options?.notBeforeTimestampMs
+    if (
+      notBeforeTimestampMs !== undefined &&
+      (eventTimestampMs === undefined || eventTimestampMs < notBeforeTimestampMs)
+    ) {
+      continue
+    }
+
+    const rawInfo = parsedLine.payload?.info
+    if (!rawInfo || typeof rawInfo !== "object") continue
+
+    const rawTokenUsage = (rawInfo as any).last_token_usage
+    let lastTokenUsage: CodexTokenUsage | undefined
+    if (rawTokenUsage && typeof rawTokenUsage === "object") {
+      const tokenUsage = rawTokenUsage as any
+      const parsedTokenUsage: CodexTokenUsage = {
+        input_tokens: toNonNegativeInt(tokenUsage.input_tokens),
+        cached_input_tokens: toNonNegativeInt(tokenUsage.cached_input_tokens),
+        output_tokens: toNonNegativeInt(tokenUsage.output_tokens),
+        total_tokens: toNonNegativeInt(tokenUsage.total_tokens),
+      }
+      if (Object.values(parsedTokenUsage).some((tokenCount) => tokenCount !== undefined)) {
+        lastTokenUsage = parsedTokenUsage
+      }
+    }
+
+    const modelContextWindow = toNonNegativeInt(
+      (rawInfo as any).model_context_window,
+    )
+
+    const info: CodexTokenCountInfo = {
+      last_token_usage: lastTokenUsage,
+      model_context_window: modelContextWindow,
+    }
+    if (!info.last_token_usage && info.model_context_window === undefined) continue
+
+    return info
+  }
+
+  return null
+}
+
+function mapToUsageMetadata(info: CodexTokenCountInfo): CodexUsageMetadata | null {
+  const perMessageUsage = info.last_token_usage
+
+  if (!perMessageUsage && info.model_context_window === undefined) {
+    return null
+  }
+
+  const inputTokens =
+    perMessageUsage?.input_tokens !== undefined
+      ? Math.max(
+          0,
+          perMessageUsage.input_tokens - (perMessageUsage.cached_input_tokens ?? 0),
+        )
+      : undefined
+  const outputTokens = perMessageUsage?.output_tokens
+  const totalTokens =
+    perMessageUsage?.total_tokens ??
+    (perMessageUsage?.input_tokens !== undefined || perMessageUsage?.output_tokens !== undefined
+      ? (perMessageUsage?.input_tokens ?? 0) + (perMessageUsage?.output_tokens ?? 0)
+      : undefined
+    )
+
+  const usageMetadata: CodexUsageMetadata = {}
+  if (inputTokens !== undefined) usageMetadata.inputTokens = inputTokens
+  if (outputTokens !== undefined) usageMetadata.outputTokens = outputTokens
+  if (totalTokens !== undefined) usageMetadata.totalTokens = totalTokens
+  if (info.model_context_window !== undefined) {
+    usageMetadata.modelContextWindow = info.model_context_window
+  }
+
+  return Object.keys(usageMetadata).length > 0 ? usageMetadata : null
+}
+
+async function pollUsage(
+  sessionId: string,
+  options?: { notBeforeTimestampMs?: number },
+): Promise<CodexUsageMetadata | null> {
+  let sessionFilePath: string | null = null
+
+  for (let attempt = 0; attempt < CODEX_USAGE_POLL_ATTEMPTS; attempt += 1) {
+    if (!sessionFilePath) {
+      sessionFilePath = await findSessionFileById(sessionId)
+    }
+
+    if (sessionFilePath) {
+      const latestInfo = await readLatestTokenCountInfo(sessionFilePath, options)
+      if (latestInfo) {
+        const usageMetadata = mapToUsageMetadata(latestInfo)
+        if (usageMetadata) {
+          return usageMetadata
+        }
+      }
+    }
+
+    if (attempt < CODEX_USAGE_POLL_ATTEMPTS - 1) {
+      await sleep(CODEX_USAGE_POLL_INTERVAL_MS)
+    }
+  }
+
+  return null
 }
 
 function getCodexMcpAuthState(authStatus: string | null | undefined): {
@@ -1419,10 +1675,14 @@ export const codexRouter = router({
                 return null
               }
 
-              return {
+              const cleanedMessage = {
                 ...message,
                 parts: cleanedParts,
               }
+
+              return normalizeCodexAssistantMessage(cleanedMessage, {
+                normalizeState: true,
+              })
             }
 
             if (!isDuplicatePrompt) {
@@ -1481,6 +1741,25 @@ export const codexRouter = router({
             })
 
             const startedAt = Date.now()
+            let latestSessionId =
+              provider.getSessionId() ||
+              input.sessionId ||
+              getLastSessionId(existingMessages)
+            let usagePromise: Promise<CodexUsageMetadata | null> | null = null
+
+            const resolveUsageOnce = (): Promise<CodexUsageMetadata | null> => {
+              if (usagePromise) return usagePromise
+
+              const sessionId = latestSessionId || provider.getSessionId()
+              if (!sessionId) {
+                return Promise.resolve(null)
+              }
+
+              usagePromise = pollUsage(sessionId, {
+                notBeforeTimestampMs: startedAt,
+              }).catch(() => null)
+              return usagePromise
+            }
 
             const result = streamText({
               model: provider.languageModel(selectedModelId),
@@ -1499,14 +1778,14 @@ export const codexRouter = router({
               generateMessageId: () => crypto.randomUUID(),
               messageMetadata: ({ part }) => {
                 const sessionId = provider.getSessionId() || undefined
+                if (sessionId) {
+                  latestSessionId = sessionId
+                }
 
                 if (part.type === "finish") {
                   return {
                     model: metadataModel,
                     sessionId,
-                    inputTokens: part.totalUsage.inputTokens,
-                    outputTokens: part.totalUsage.outputTokens,
-                    totalTokens: part.totalUsage.totalTokens,
                     durationMs: Date.now() - startedAt,
                     resultSubtype: part.finishReason === "error" ? "error" : "success",
                   }
@@ -1521,10 +1800,20 @@ export const codexRouter = router({
 
                 return { model: metadataModel }
               },
-              onFinish: ({ responseMessage, isContinuation }) => {
+              onFinish: async ({ responseMessage, isContinuation }) => {
                 try {
+                  const usageMetadata = await resolveUsageOnce()
+                  const responseWithUsage = usageMetadata
+                    ? {
+                        ...responseMessage,
+                        metadata: {
+                          ...((responseMessage as any)?.metadata || {}),
+                          ...usageMetadata,
+                        },
+                      }
+                    : responseMessage
                   const cleanedResponseMessage =
-                    cleanAssistantMessageForPersistence(responseMessage)
+                    cleanAssistantMessageForPersistence(responseWithUsage)
 
                   if (!cleanedResponseMessage) {
                     persistSubChatMessages(messagesForStream)
@@ -1547,6 +1836,7 @@ export const codexRouter = router({
             })
 
             const reader = uiStream.getReader()
+            let pendingFinishChunk: any | null = null
             while (true) {
               const { done, value } = await reader.read()
               if (done) break
@@ -1562,7 +1852,25 @@ export const codexRouter = router({
                 continue
               }
 
+              if (value?.type === "finish") {
+                pendingFinishChunk = value
+                continue
+              }
+
               safeEmit(value)
+            }
+
+            if (pendingFinishChunk) {
+              const usageMetadata = await resolveUsageOnce()
+              if (usageMetadata) {
+                safeEmit({
+                  type: "message-metadata",
+                  messageMetadata: usageMetadata,
+                })
+              }
+              safeEmit(pendingFinishChunk)
+            } else {
+              safeEmit({ type: "finish" })
             }
 
             safeComplete()

@@ -59,16 +59,16 @@ function getFileSize(filePath) {
 }
 
 /**
- * Find ZIP file matching pattern in release directory
+ * Find file matching pattern and extension in release directory
  */
-function findZipFile(pattern) {
+function findReleaseFile(pattern, ext = ".zip") {
   if (!existsSync(releaseDir)) {
     console.error(`Release directory not found: ${releaseDir}`)
     process.exit(1)
   }
 
   const files = readdirSync(releaseDir)
-  const match = files.find((f) => f.includes(pattern) && f.endsWith(".zip"))
+  const match = files.find((f) => f.includes(pattern) && f.endsWith(ext))
   return match ? join(releaseDir, match) : null
 }
 
@@ -80,7 +80,7 @@ function generateManifest(arch) {
   // arm64: Agents-{version}-arm64-mac.zip
   // x64: Agents-{version}-mac.zip
   const pattern = arch === "arm64" ? `${version}-arm64-mac` : `${version}-mac`
-  const zipPath = findZipFile(pattern)
+  const zipPath = findReleaseFile(pattern, ".zip")
 
   if (!zipPath) {
     console.warn(`Warning: ZIP file not found for pattern: ${pattern}`)
@@ -174,6 +174,53 @@ function formatBytes(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i]
 }
 
+/**
+ * Generate manifest for Linux AppImage
+ */
+function generateLinuxManifest() {
+  const appImagePath = findReleaseFile(`${version}`, ".AppImage")
+
+  if (!appImagePath) {
+    console.warn(`Warning: AppImage file not found for version: ${version}`)
+    console.warn(`Skipping Linux manifest generation`)
+    return null
+  }
+
+  const appImageName = appImagePath.split("/").pop()
+  const sha512 = calculateSha512(appImagePath)
+  const size = getFileSize(appImagePath)
+
+  const manifest = {
+    version,
+    files: [
+      {
+        url: appImageName,
+        sha512,
+        size,
+      },
+    ],
+    path: appImageName,
+    sha512,
+    releaseDate: new Date().toISOString(),
+  }
+
+  const prefix = channel === "beta" ? "beta" : "latest"
+  const manifestFileName = `${prefix}-linux.yml`
+  const manifestPath = join(releaseDir, manifestFileName)
+
+  const yaml = objectToYaml(manifest)
+  writeFileSync(manifestPath, yaml)
+
+  console.log(`Generated ${manifestFileName}:`)
+  console.log(`  Version: ${version}`)
+  console.log(`  File: ${appImageName}`)
+  console.log(`  Size: ${formatBytes(size)}`)
+  console.log(`  SHA512: ${sha512.substring(0, 20)}...`)
+  console.log()
+
+  return manifestPath
+}
+
 // Main execution
 console.log("=".repeat(50))
 console.log("Generating electron-updater manifests")
@@ -185,8 +232,9 @@ console.log()
 
 const arm64Manifest = generateManifest("arm64")
 const x64Manifest = generateManifest("x64")
+const linuxManifest = generateLinuxManifest()
 
-if (!arm64Manifest && !x64Manifest) {
+if (!arm64Manifest && !x64Manifest && !linuxManifest) {
   console.error("No manifest files were generated!")
   console.error("Make sure you have built the app with: npm run dist")
   process.exit(1)

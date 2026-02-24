@@ -4,7 +4,7 @@ import { memo, useMemo, useEffect, useRef, useSyncExternalStore, useCallback } f
 import { useAtomValue } from "jotai"
 import { cn } from "../../../lib/utils"
 import { MemoizedMarkdown } from "../../../components/chat-markdown-renderer"
-import { messageAtomFamily, isMessageStreamingAtomFamily } from "../stores/message-store"
+import { getPerChatMessageKey, messageAtomFamily, isMessageStreamingAtomFamily } from "../stores/message-store"
 import { useSearchHighlight, useSearchQuery } from "../search"
 import { appStore } from "../../../lib/jotai-store"
 
@@ -24,14 +24,42 @@ const textPartStore = new Map<string, string>()
 // Subscribers per part key
 const textPartSubscribers = new Map<string, Set<() => void>>()
 
+export function clearTextPartStoreByMessageIds(subChatId: string, messageIds: string[]) {
+  if (messageIds.length === 0) return
+  const subChatPrefix = `${subChatId}:`
+  const messageIdSet = new Set(messageIds)
+
+  for (const key of Array.from(textPartStore.keys())) {
+    if (!key.startsWith(subChatPrefix)) continue
+    const suffix = key.slice(subChatPrefix.length)
+    const separatorIndex = suffix.lastIndexOf(":")
+    if (separatorIndex === -1) continue
+    const messageId = suffix.slice(0, separatorIndex)
+    if (messageIdSet.has(messageId)) {
+      textPartStore.delete(key)
+    }
+  }
+
+  for (const key of Array.from(textPartSubscribers.keys())) {
+    if (!key.startsWith(subChatPrefix)) continue
+    const suffix = key.slice(subChatPrefix.length)
+    const separatorIndex = suffix.lastIndexOf(":")
+    if (separatorIndex === -1) continue
+    const messageId = suffix.slice(0, separatorIndex)
+    if (messageIdSet.has(messageId)) {
+      textPartSubscribers.delete(key)
+    }
+  }
+}
+
 // Get text from a specific part
-function getTextPart(messageId: string, partIndex: number): string {
-  const key = `${messageId}:${partIndex}`
+function getTextPart(subChatId: string, messageId: string, partIndex: number): string {
+  const key = `${subChatId}:${messageId}:${partIndex}`
   const cached = textPartStore.get(key)
   if (cached !== undefined) return cached
 
   // Get from Jotai store
-  const message = appStore.get(messageAtomFamily(messageId))
+  const message = appStore.get(messageAtomFamily(getPerChatMessageKey(subChatId, messageId)))
   const parts = message?.parts || []
   const part = parts[partIndex]
   const text = part?.type === "text" ? (part.text || "") : ""
@@ -40,8 +68,9 @@ function getTextPart(messageId: string, partIndex: number): string {
 }
 
 // Subscribe to changes for a specific part
-function subscribeToTextPart(messageId: string, partIndex: number, callback: () => void): () => void {
-  const key = `${messageId}:${partIndex}`
+function subscribeToTextPart(subChatId: string, messageId: string, partIndex: number, callback: () => void): () => void {
+  const key = `${subChatId}:${messageId}:${partIndex}`
+  const messageKey = getPerChatMessageKey(subChatId, messageId)
 
   // Add to subscribers
   if (!textPartSubscribers.has(key)) {
@@ -50,8 +79,8 @@ function subscribeToTextPart(messageId: string, partIndex: number, callback: () 
   textPartSubscribers.get(key)!.add(callback)
 
   // Subscribe to Jotai message atom
-  const unsubscribe = appStore.sub(messageAtomFamily(messageId), () => {
-    const message = appStore.get(messageAtomFamily(messageId))
+  const unsubscribe = appStore.sub(messageAtomFamily(messageKey), () => {
+    const message = appStore.get(messageAtomFamily(messageKey))
     const parts = message?.parts || []
     const part = parts[partIndex]
     const newText = part?.type === "text" ? (part.text || "") : ""
@@ -74,15 +103,15 @@ function subscribeToTextPart(messageId: string, partIndex: number, callback: () 
 }
 
 // Hook to get text part with minimal re-renders
-function useTextPart(messageId: string, partIndex: number): string {
+function useTextPart(subChatId: string, messageId: string, partIndex: number): string {
   const subscribe = useCallback(
-    (callback: () => void) => subscribeToTextPart(messageId, partIndex, callback),
-    [messageId, partIndex]
+    (callback: () => void) => subscribeToTextPart(subChatId, messageId, partIndex, callback),
+    [subChatId, messageId, partIndex]
   )
 
   const getSnapshot = useCallback(
-    () => getTextPart(messageId, partIndex),
-    [messageId, partIndex]
+    () => getTextPart(subChatId, messageId, partIndex),
+    [subChatId, messageId, partIndex]
   )
 
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
@@ -113,6 +142,7 @@ function useTextPart(messageId: string, partIndex: number): string {
 // ============================================================================
 
 interface IsolatedTextPartProps {
+  subChatId: string
   messageId: string
   partIndex: number
   isFinalText: boolean
@@ -122,6 +152,7 @@ interface IsolatedTextPartProps {
 // Stable comparison - only re-render if props change (they don't during streaming)
 function arePropsEqual(prev: IsolatedTextPartProps, next: IsolatedTextPartProps): boolean {
   return (
+    prev.subChatId === next.subChatId &&
     prev.messageId === next.messageId &&
     prev.partIndex === next.partIndex &&
     prev.isFinalText === next.isFinalText &&
@@ -216,6 +247,7 @@ function highlightTextInDom(
 }
 
 export const IsolatedTextPart = memo(function IsolatedTextPart({
+  subChatId,
   messageId,
   partIndex,
   isFinalText,
@@ -225,7 +257,7 @@ export const IsolatedTextPart = memo(function IsolatedTextPart({
 
   // Use external store to subscribe to ONLY this text part
   // This prevents re-renders when other parts of the same message change
-  const text = useTextPart(messageId, partIndex)
+  const text = useTextPart(subChatId, messageId, partIndex)
 
   // Use per-message streaming atom instead of global isStreamingAtom
   // This prevents re-renders of old messages when streaming status changes
@@ -305,6 +337,7 @@ export const IsolatedTextPart = memo(function IsolatedTextPart({
 // NOT when text content changes within existing parts.
 
 interface IsolatedTextPartsProps {
+  subChatId: string
   messageId: string
   // For determining which parts to show and how
   finalTextIndex: number  // Index where "final text" starts (-1 if none)
@@ -314,6 +347,7 @@ interface IsolatedTextPartsProps {
 
 function areListPropsEqual(prev: IsolatedTextPartsProps, next: IsolatedTextPartsProps): boolean {
   return (
+    prev.subChatId === next.subChatId &&
     prev.messageId === next.messageId &&
     prev.finalTextIndex === next.finalTextIndex &&
     prev.visibleStepsCount === next.visibleStepsCount &&
@@ -322,13 +356,14 @@ function areListPropsEqual(prev: IsolatedTextPartsProps, next: IsolatedTextParts
 }
 
 export const IsolatedTextPartsList = memo(function IsolatedTextPartsList({
+  subChatId,
   messageId,
   finalTextIndex,
   visibleStepsCount,
   showOnlyFinalText = false,
 }: IsolatedTextPartsProps) {
   // Subscribe to message just to get parts structure (not content)
-  const message = useAtomValue(messageAtomFamily(messageId))
+  const message = useAtomValue(messageAtomFamily(getPerChatMessageKey(subChatId, messageId)))
 
   // Find indices of text parts that should be rendered
   // This is a stable calculation - only changes when parts array structure changes
@@ -362,6 +397,7 @@ export const IsolatedTextPartsList = memo(function IsolatedTextPartsList({
       {textPartIndices.map((partIndex) => (
         <IsolatedTextPart
           key={`${messageId}-text-${partIndex}`}
+          subChatId={subChatId}
           messageId={messageId}
           partIndex={partIndex}
           isFinalText={showOnlyFinalText && finalTextIndex !== -1 && partIndex === finalTextIndex}

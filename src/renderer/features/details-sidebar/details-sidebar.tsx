@@ -311,7 +311,7 @@ export function DetailsSidebar({
       onClose={closeSidebar}
       widthAtom={detailsSidebarWidthAtom}
       side="right"
-      minWidth={350}
+      minWidth={250}
       maxWidth={700}
       animationDuration={0}
       initialWidth={0}

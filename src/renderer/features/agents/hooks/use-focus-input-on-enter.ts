@@ -8,8 +8,11 @@ import { useEffect, type RefObject } from "react"
  */
 export function useFocusInputOnEnter(
   editorRef: RefObject<{ focus: () => void } | null>,
+  enabled = true,
 ) {
   useEffect(() => {
+    if (!enabled) return
+
     const handleKeyDown = (e: KeyboardEvent) => {
       // Only handle Enter without modifiers
       if (
@@ -50,5 +53,5 @@ export function useFocusInputOnEnter(
 
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [editorRef])
+  }, [editorRef, enabled])
 }
