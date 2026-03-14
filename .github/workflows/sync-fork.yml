@@ -161,6 +161,8 @@ jobs:
     needs: [check-upstream, sync-and-build]
     if: needs.check-upstream.outputs.should_release == 'true' && (needs['sync-and-build'].result == 'skipped' || needs['sync-and-build'].outputs.sync_success == 'true')
     uses: ./.github/workflows/build-release.yml
+    with:
+      release_version: ${{ needs.check-upstream.outputs.latest_release_tag }}
     secrets: inherit
 
   mark-release-tag:
@@ -172,12 +174,16 @@ jobs:
       - name: Checkout fork
         uses: actions/checkout@v4
         with:
+          ref: main
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Configure Git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Pull latest (sync-and-build may have pushed)
+        run: git pull --rebase origin main
 
       - name: Update last released upstream tag marker
         run: |
